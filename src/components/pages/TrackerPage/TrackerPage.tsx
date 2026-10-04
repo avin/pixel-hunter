@@ -3,20 +3,23 @@ import { profilePath } from "@/components/app/AppRouter/paths";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useListProfilesQuery } from "@/store/api";
+import { PixelsSection } from "./PixelsSection/PixelsSection";
 import { TrackerForm } from "./TrackerForm/TrackerForm";
 
 export function TrackerPage() {
   const { profileId = "", trackerId = "" } = useParams();
-  const { tracker, isLoading, isError, refetch } = useListProfilesQuery(
+  const { profile, tracker, isLoading, isError, refetch } = useListProfilesQuery(
     undefined,
     {
-      selectFromResult: ({ data, isLoading, isError }) => ({
-        tracker: data
-          ?.find(({ id }) => id === profileId)
-          ?.trackers.find(({ id }) => id === trackerId),
-        isLoading,
-        isError,
-      }),
+      selectFromResult: ({ data, isLoading, isError }) => {
+        const profile = data?.find(({ id }) => id === profileId);
+        return {
+          profile,
+          tracker: profile?.trackers.find(({ id }) => id === trackerId),
+          isLoading,
+          isError,
+        };
+      },
     },
   );
 
@@ -39,7 +42,7 @@ export function TrackerPage() {
       </div>
     );
   }
-  if (!tracker) {
+  if (!profile || !tracker) {
     return (
       <div className="flex flex-col items-start gap-3 p-6">
         <p className="text-sm">Отслеживание не найдено.</p>
@@ -53,5 +56,14 @@ export function TrackerPage() {
     );
   }
 
-  return <TrackerForm key={tracker.id} profileId={profileId} tracker={tracker} />;
+  return (
+    <div className="flex flex-col">
+      <TrackerForm key={tracker.id} profileId={profileId} tracker={tracker} />
+      <PixelsSection
+        profileId={profileId}
+        processName={profile.processName}
+        tracker={tracker}
+      />
+    </div>
+  );
 }

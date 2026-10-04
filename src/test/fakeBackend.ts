@@ -1,5 +1,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
+  Pixel,
+  PixelInput,
   Profile,
   ProfileInput,
   Tracker,
@@ -14,6 +16,8 @@ interface Options {
 
 type Args = Record<string, unknown>;
 
+export const SCREENSHOTS_DIR = "C:\\data\\screenshots";
+
 /** In-memory stand-in for the Rust commands, installed through `mockIPC`. */
 export function createFakeBackend({ profiles = [], processes = [] }: Options = {}) {
   const state = {
@@ -21,6 +25,7 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
     processes: structuredClone(processes),
   };
   const failures = new Map<string, string>();
+  const calls: { command: string; args: Args }[] = [];
   let lastId = 0;
   const nextId = () => `generated-${++lastId}`;
 
@@ -36,6 +41,14 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
     );
     if (!tracker) throw new Error(`Unknown tracker ${String(trackerId)}`);
     return tracker;
+  };
+
+  const findPixel = (args: Args) => {
+    const pixel = findTracker(args.profileId, args.trackerId).pixels.find(
+      (candidate) => candidate.id === args.pixelId,
+    );
+    if (!pixel) throw new Error(`Unknown pixel ${String(args.pixelId)}`);
+    return pixel;
   };
 
   function handle(command: string, args: Args): unknown {
@@ -66,6 +79,7 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
           name: args.name as string,
           preActionDelayMs: { min: 100, max: 300 },
           resumeDelayMs: 1000,
+          pixels: [],
         };
         findProfile(args.profileId).trackers.push(tracker);
         return structuredClone(tracker);
@@ -83,6 +97,29 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
         );
         return null;
       }
+      case "pixel_update": {
+        const pixel = findPixel(args);
+        Object.assign(pixel, args.input as PixelInput);
+        return structuredClone(pixel);
+      }
+      case "pixel_delete": {
+        const tracker = findTracker(args.profileId, args.trackerId);
+        findPixel(args);
+        tracker.pixels = tracker.pixels.filter(({ id }) => id !== args.pixelId);
+        return null;
+      }
+      case "pixel_capture_start":
+        findTracker(args.profileId, args.trackerId);
+        return null;
+      case "pixel_capture_cancel":
+      case "pixel_capture_pick":
+      case "plugin:window|close":
+        return null;
+      case "pixel_view_open":
+        findPixel(args);
+        return null;
+      case "screenshots_dir":
+        return SCREENSHOTS_DIR;
       case "windowed_processes_list":
         return structuredClone(state.processes);
       default:
@@ -92,6 +129,12 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
 
   return {
     state,
+    /** Arguments of every call of `command`, oldest first. */
+    callsOf(command: string) {
+      return calls
+        .filter((call) => call.command === command)
+        .map((call) => call.args);
+    },
     /**
      * Makes every following call of `command` fail the way a Rust error does;
      * `undefined` lets it succeed again.
@@ -103,14 +146,20 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
         failures.set(command, message);
       }
     },
+    /** Events sent with `emit` from `@tauri-apps/api/event` reach the app's listeners. */
     install() {
-      mockIPC((command, payload) => {
-        const failure = failures.get(command);
-        if (failure !== undefined) {
-          return Promise.reject(failure);
-        }
-        return handle(command, (payload ?? {}) as Args);
-      });
+      mockIPC(
+        (command, payload) => {
+          const args = (payload ?? {}) as Args;
+          calls.push({ command, args });
+          const failure = failures.get(command);
+          if (failure !== undefined) {
+            return Promise.reject(failure);
+          }
+          return handle(command, args);
+        },
+        { shouldMockEvents: true },
+      );
     },
   };
 }
@@ -133,6 +182,19 @@ export function trackerFixture(overrides: Partial<Tracker> = {}): Tracker {
     name: "Здоровье",
     preActionDelayMs: { min: 100, max: 300 },
     resumeDelayMs: 1000,
+    pixels: [],
+    ...overrides,
+  };
+}
+
+export function pixelFixture(overrides: Partial<Pixel> = {}): Pixel {
+  return {
+    id: "pixel-1",
+    x: 812,
+    y: 1040,
+    color: { r: 200, g: 30, b: 30 },
+    condition: "equals",
+    tolerancePercent: 10,
     ...overrides,
   };
 }

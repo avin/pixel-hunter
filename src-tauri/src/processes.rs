@@ -126,7 +126,7 @@ unsafe fn app_window(hwnd: HWND) -> Option<AppWindow> {
     }
 }
 
-fn exe_name(pid: u32) -> Option<String> {
+pub fn exe_name(pid: u32) -> Option<String> {
     unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buffer = vec![0u16; 32_768];

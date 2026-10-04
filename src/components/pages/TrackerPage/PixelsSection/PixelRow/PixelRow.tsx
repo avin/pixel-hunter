@@ -1,0 +1,194 @@
+import { useForm, useFormValidation, useFormWatch } from "@avinlab/react-form";
+import { ImageOff, Trash2 } from "lucide-react";
+import { useId, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { FieldError } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TableCell, TableRow } from "@/components/ui/table";
+import { useErrorReveal } from "@/hooks/useErrorReveal";
+import { screenshotSrc } from "@/lib/screenshots";
+import {
+  usePixelDeleteMutation,
+  usePixelUpdateMutation,
+  usePixelViewOpenMutation,
+} from "@/store/api";
+import type { Pixel, PixelCondition, Rgb } from "@/store/types";
+
+interface Props {
+  profileId: string;
+  trackerId: string;
+  pixel: Pixel;
+  screenshotsDir?: string;
+}
+
+interface Values {
+  tolerance: string;
+}
+
+const CONDITION_LABELS: Record<PixelCondition, string> = {
+  equals: "Равно",
+  notEquals: "Не равно",
+};
+const FIELDS = ["tolerance"] as const;
+
+function validateTolerance(values: Readonly<Values>) {
+  const value = values.tolerance.trim();
+  const isValid = /^\d+$/.test(value) && Number(value) <= 100;
+  return { tolerance: isValid ? undefined : "Введите целое число от 0 до 100" };
+}
+
+function toHex({ r, g, b }: Rgb) {
+  return `#${[r, g, b].map((part) => part.toString(16).padStart(2, "0")).join("")}`.toUpperCase();
+}
+
+export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props) {
+  const pixelArgs = { profileId, trackerId, pixelId: pixel.id };
+  const point = `(${pixel.x}, ${pixel.y})`;
+  const hex = toHex(pixel.color);
+
+  const form = useForm<Values>({ tolerance: String(pixel.tolerancePercent) });
+  const tolerance = useFormWatch(form, "tolerance");
+  const { errors } = useFormValidation(form, validateTolerance);
+  const reveal = useErrorReveal<"tolerance">();
+  const toleranceError = reveal.visibleError(errors, "tolerance");
+  const toleranceErrorId = useId();
+
+  const [hasThumbnailError, setHasThumbnailError] = useState(false);
+  const [updatePixel] = usePixelUpdateMutation();
+  const [deletePixel, deleteState] = usePixelDeleteMutation();
+  const [openViewer] = usePixelViewOpenMutation();
+
+  function saveTolerance() {
+    const value = form.values.tolerance.trim();
+    if (validateTolerance(form.values).tolerance || Number(value) === pixel.tolerancePercent) {
+      return;
+    }
+    void updatePixel({
+      ...pixelArgs,
+      input: { condition: pixel.condition, tolerancePercent: Number(value) },
+    });
+  }
+
+  return (
+    <TableRow>
+      <TableCell>
+        {screenshotsDir && !hasThumbnailError ? (
+          <button
+            type="button"
+            aria-label={`Открыть снимок пикселя ${point}`}
+            className="block rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            onClick={() => void openViewer(pixelArgs)}
+          >
+            <img
+              src={screenshotSrc(screenshotsDir, profileId, pixel.id, "thumbnail")}
+              alt=""
+              loading="lazy"
+              className="h-14 w-28 rounded-md border bg-muted object-contain"
+              onError={() => setHasThumbnailError(true)}
+            />
+          </button>
+        ) : (
+          <div className="flex h-14 w-28 items-center justify-center rounded-md border border-dashed bg-muted text-muted-foreground">
+            <ImageOff aria-hidden className="size-4" />
+            <span className="sr-only">Снимок недоступен</span>
+          </div>
+        )}
+      </TableCell>
+      <TableCell className="tabular-nums">
+        {pixel.x}, {pixel.y}
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="size-4 shrink-0 rounded-sm border"
+            style={{ backgroundColor: hex }}
+          />
+          <span className="font-mono text-xs">{hex}</span>
+        </div>
+      </TableCell>
+      <TableCell>
+        <Select
+          items={CONDITION_LABELS}
+          value={pixel.condition}
+          onValueChange={(condition) => {
+            if (condition && condition !== pixel.condition) {
+              void updatePixel({
+                ...pixelArgs,
+                input: { condition, tolerancePercent: pixel.tolerancePercent },
+              });
+            }
+          }}
+        >
+          <SelectTrigger size="sm" aria-label={`Условие пикселя ${point}`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent alignItemWithTrigger={false}>
+            {Object.entries(CONDITION_LABELS).map(([value, label]) => (
+              <SelectItem key={value} value={value}>
+                {label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </TableCell>
+      <TableCell>
+        <div>
+          <Input
+            type="number"
+            inputMode="numeric"
+            min={0}
+            max={100}
+            step={1}
+            value={tolerance}
+            aria-label={`Допуск пикселя ${point}, %`}
+            aria-invalid={toleranceError ? true : undefined}
+            aria-describedby={toleranceError ? toleranceErrorId : undefined}
+            className="h-7 w-20"
+            onChange={(event) => {
+              form.setValue("tolerance", event.currentTarget.value);
+              reveal.change("tolerance");
+            }}
+            onBlur={() => {
+              reveal.blur("tolerance", validateTolerance(form.values));
+              saveTolerance();
+            }}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                !reveal.submit(validateTolerance(form.values), FIELDS)
+              ) {
+                saveTolerance();
+              }
+            }}
+          />
+          {toleranceError && (
+            <FieldError id={toleranceErrorId} className="mt-1 max-w-40 whitespace-normal">
+              {toleranceError}
+            </FieldError>
+          )}
+        </div>
+      </TableCell>
+      <TableCell>
+        <div className="flex justify-end">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Удалить пиксель ${point}`}
+            disabled={deleteState.isLoading}
+            onClick={() => void deletePixel(pixelArgs)}
+          >
+            <Trash2 />
+          </Button>
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}

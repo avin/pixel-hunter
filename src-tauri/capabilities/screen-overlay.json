@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screen-overlay",
+  "description": "Capability for the screenshot picker and viewer window",
+  "windows": ["screen-overlay"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
+}

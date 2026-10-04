@@ -1,9 +1,10 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::config::{Config, DelayRange, Profile, Tracker};
+use crate::config::{Config, DelayRange, Pixel, PixelCondition, Profile, Tracker};
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
+use crate::screenshots::Screenshots;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +19,13 @@ pub struct TrackerInput {
     pub name: String,
     pub pre_action_delay_ms: DelayRange,
     pub resume_delay_ms: u32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PixelInput {
+    pub condition: PixelCondition,
+    pub tolerance_percent: u8,
 }
 
 pub fn list_profiles(store: &ConfigStore) -> Vec<Profile> {
@@ -45,7 +53,7 @@ pub fn update_profile(store: &ConfigStore, id: Uuid, input: ProfileInput) -> App
     })
 }
 
-pub fn delete_profile(store: &ConfigStore, id: Uuid) -> AppResult<()> {
+pub fn delete_profile(store: &ConfigStore, screenshots: &Screenshots, id: Uuid) -> AppResult<()> {
     store.update(|config| {
         let index = config
             .profiles
@@ -54,7 +62,9 @@ pub fn delete_profile(store: &ConfigStore, id: Uuid) -> AppResult<()> {
             .ok_or(PROFILE_NOT_FOUND)?;
         config.profiles.remove(index);
         Ok(())
-    })
+    })?;
+    screenshots.remove_profile(id);
+    Ok(())
 }
 
 pub fn create_tracker(store: &ConfigStore, profile_id: Uuid, name: String) -> AppResult<Tracker> {
@@ -84,20 +94,125 @@ pub fn update_tracker(
     })
 }
 
-pub fn delete_tracker(store: &ConfigStore, profile_id: Uuid, tracker_id: Uuid) -> AppResult<()> {
-    store.update(|config| {
+pub fn delete_tracker(
+    store: &ConfigStore,
+    screenshots: &Screenshots,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+) -> AppResult<()> {
+    let removed = store.update(|config| {
         let trackers = &mut find_profile(config, profile_id)?.trackers;
         let index = trackers
             .iter()
             .position(|tracker| tracker.id == tracker_id)
             .ok_or(TRACKER_NOT_FOUND)?;
-        trackers.remove(index);
+        Ok(trackers.remove(index))
+    })?;
+    for pixel in removed.pixels {
+        screenshots.remove_pixel(profile_id, pixel.id);
+    }
+    Ok(())
+}
+
+pub fn add_pixel(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    pixel: Pixel,
+) -> AppResult<Pixel> {
+    pixel.validate()?;
+    store.update(|config| {
+        find_tracker(config, profile_id, tracker_id)?
+            .pixels
+            .push(pixel.clone());
+        Ok(pixel)
+    })
+}
+
+pub fn update_pixel(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    pixel_id: Uuid,
+    input: PixelInput,
+) -> AppResult<Pixel> {
+    store.update(|config| {
+        let pixel = find_tracker(config, profile_id, tracker_id)?
+            .pixels
+            .iter_mut()
+            .find(|pixel| pixel.id == pixel_id)
+            .ok_or(PIXEL_NOT_FOUND)?;
+        let mut updated = pixel.clone();
+        updated.condition = input.condition;
+        updated.tolerance_percent = input.tolerance_percent;
+        updated.validate()?;
+        *pixel = updated.clone();
+        Ok(updated)
+    })
+}
+
+pub fn delete_pixel(
+    store: &ConfigStore,
+    screenshots: &Screenshots,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    pixel_id: Uuid,
+) -> AppResult<()> {
+    store.update(|config| {
+        let pixels = &mut find_tracker(config, profile_id, tracker_id)?.pixels;
+        let index = pixels
+            .iter()
+            .position(|pixel| pixel.id == pixel_id)
+            .ok_or(PIXEL_NOT_FOUND)?;
+        pixels.remove(index);
         Ok(())
+    })?;
+    screenshots.remove_pixel(profile_id, pixel_id);
+    Ok(())
+}
+
+pub fn get_pixel(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    pixel_id: Uuid,
+) -> AppResult<Pixel> {
+    store.read(|config| {
+        config
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or(PROFILE_NOT_FOUND)?
+            .trackers
+            .iter()
+            .find(|tracker| tracker.id == tracker_id)
+            .ok_or(TRACKER_NOT_FOUND)?
+            .pixels
+            .iter()
+            .find(|pixel| pixel.id == pixel_id)
+            .cloned()
+            .ok_or(PIXEL_NOT_FOUND)
+    })
+}
+
+/// Process name of the profile that owns the tracker.
+pub fn profile_process_name(store: &ConfigStore, profile_id: Uuid, tracker_id: Uuid) -> AppResult<String> {
+    store.read(|config| {
+        let profile = config
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or(PROFILE_NOT_FOUND)?;
+        if !profile.trackers.iter().any(|tracker| tracker.id == tracker_id) {
+            return Err(TRACKER_NOT_FOUND);
+        }
+        Ok(profile.process_name.clone())
     })
 }
 
 const PROFILE_NOT_FOUND: AppError = AppError::NotFound("Профиль не найден");
 const TRACKER_NOT_FOUND: AppError = AppError::NotFound("Отслеживание не найдено");
+const PIXEL_NOT_FOUND: AppError = AppError::NotFound("Пиксель не найден");
 
 fn find_profile(config: &mut Config, id: Uuid) -> AppResult<&mut Profile> {
     config
@@ -118,18 +233,26 @@ fn find_tracker(config: &mut Config, profile_id: Uuid, tracker_id: Uuid) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Rgb;
+    use std::fs;
     use tempfile::TempDir;
 
     struct Fixture {
         dir: TempDir,
         store: ConfigStore,
+        screenshots: Screenshots,
     }
 
     impl Fixture {
         fn new() -> Self {
             let dir = tempfile::tempdir().unwrap();
             let store = ConfigStore::load(dir.path()).unwrap().store;
-            Self { dir, store }
+            let screenshots = Screenshots::new(dir.path().join("screenshots"));
+            Self {
+                dir,
+                store,
+                screenshots,
+            }
         }
 
         fn reloaded(&self) -> Vec<Profile> {
@@ -138,6 +261,27 @@ mod tests {
 
         fn profile(&self, name: &str) -> Profile {
             create_profile(&self.store, profile_input(name, "game.exe")).unwrap()
+        }
+
+        /// Adds a pixel to the tracker together with its screenshot files.
+        fn pixel(&self, profile_id: Uuid, tracker_id: Uuid) -> Pixel {
+            let pixel = Pixel::new(Uuid::new_v4(), 812, 1040, Rgb { r: 200, g: 30, b: 30 });
+            fs::create_dir_all(self.screenshots.profile_dir(profile_id)).unwrap();
+            fs::write(self.screenshots.image_path(profile_id, pixel.id), b"png").unwrap();
+            fs::write(self.screenshots.thumbnail_path(profile_id, pixel.id), b"png").unwrap();
+            add_pixel(&self.store, profile_id, tracker_id, pixel).unwrap()
+        }
+
+        fn has_screenshot(&self, profile_id: Uuid, pixel_id: Uuid) -> bool {
+            self.screenshots.image_path(profile_id, pixel_id).exists()
+                || self.screenshots.thumbnail_path(profile_id, pixel_id).exists()
+        }
+    }
+
+    fn pixel_input(condition: PixelCondition, tolerance_percent: u8) -> PixelInput {
+        PixelInput {
+            condition,
+            tolerance_percent,
         }
     }
 
@@ -206,15 +350,21 @@ mod tests {
     }
 
     #[test]
-    fn deletes_profile_with_trackers() {
+    fn deletes_profile_with_trackers_and_their_screenshots() {
         let fixture = Fixture::new();
         let profile = fixture.profile("Diablo");
         let kept = fixture.profile("Path of Exile");
-        create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        fixture.pixel(profile.id, tracker.id);
+        let kept_tracker = create_tracker(&fixture.store, kept.id, "Мана".into()).unwrap();
+        let kept_pixel = fixture.pixel(kept.id, kept_tracker.id);
 
-        delete_profile(&fixture.store, profile.id).unwrap();
+        delete_profile(&fixture.store, &fixture.screenshots, profile.id).unwrap();
 
-        assert_eq!(fixture.reloaded(), [kept]);
+        let remaining: Vec<_> = fixture.reloaded().iter().map(|profile| profile.id).collect();
+        assert_eq!(remaining, [kept.id]);
+        assert!(!fixture.screenshots.profile_dir(profile.id).exists());
+        assert!(fixture.has_screenshot(kept.id, kept_pixel.id));
     }
 
     #[test]
@@ -222,7 +372,10 @@ mod tests {
         let fixture = Fixture::new();
         let missing = Uuid::new_v4();
 
-        assert!(matches!(delete_profile(&fixture.store, missing), Err(AppError::NotFound(_))));
+        assert!(matches!(
+            delete_profile(&fixture.store, &fixture.screenshots, missing),
+            Err(AppError::NotFound(_))
+        ));
         assert!(matches!(
             update_profile(&fixture.store, missing, profile_input("Diablo", "game.exe")),
             Err(AppError::NotFound(_))
@@ -298,18 +451,108 @@ mod tests {
     }
 
     #[test]
-    fn deletes_tracker() {
+    fn deletes_tracker_with_its_screenshots() {
         let fixture = Fixture::new();
         let profile = fixture.profile("Diablo");
         let deleted = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let deleted_pixel = fixture.pixel(profile.id, deleted.id);
         let kept = create_tracker(&fixture.store, profile.id, "Мана".into()).unwrap();
+        let kept_pixel = fixture.pixel(profile.id, kept.id);
 
-        delete_tracker(&fixture.store, profile.id, deleted.id).unwrap();
+        delete_tracker(&fixture.store, &fixture.screenshots, profile.id, deleted.id).unwrap();
 
-        assert_eq!(fixture.reloaded()[0].trackers, [kept]);
+        assert_eq!(fixture.reloaded()[0].trackers.len(), 1);
+        assert_eq!(fixture.reloaded()[0].trackers[0].id, kept.id);
+        assert!(!fixture.has_screenshot(profile.id, deleted_pixel.id));
+        assert!(fixture.has_screenshot(profile.id, kept_pixel.id));
         assert!(matches!(
-            delete_tracker(&fixture.store, profile.id, deleted.id),
+            delete_tracker(&fixture.store, &fixture.screenshots, profile.id, deleted.id),
             Err(AppError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn adds_pixel_with_equals_condition_and_10_percent_tolerance() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+
+        let pixel = fixture.pixel(profile.id, tracker.id);
+
+        assert_eq!(pixel.condition, PixelCondition::Equals);
+        assert_eq!(pixel.tolerance_percent, 10);
+        assert_eq!(fixture.reloaded()[0].trackers[0].pixels, [pixel]);
+    }
+
+    #[test]
+    fn updates_pixel_condition_and_tolerance() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let pixel = fixture.pixel(profile.id, tracker.id);
+
+        let updated = update_pixel(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            pixel.id,
+            pixel_input(PixelCondition::NotEquals, 15),
+        )
+        .unwrap();
+
+        assert_eq!(updated.condition, PixelCondition::NotEquals);
+        assert_eq!(updated.tolerance_percent, 15);
+        assert_eq!((updated.x, updated.y, updated.color), (pixel.x, pixel.y, pixel.color));
+        assert_eq!(fixture.reloaded()[0].trackers[0].pixels, [updated]);
+    }
+
+    #[test]
+    fn rejects_tolerance_above_100() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let pixel = fixture.pixel(profile.id, tracker.id);
+
+        assert_validation_error(update_pixel(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            pixel.id,
+            pixel_input(PixelCondition::Equals, 120),
+        ));
+        assert_eq!(fixture.reloaded()[0].trackers[0].pixels, [pixel]);
+    }
+
+    #[test]
+    fn deletes_pixel_with_its_screenshot() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let deleted = fixture.pixel(profile.id, tracker.id);
+        let kept = fixture.pixel(profile.id, tracker.id);
+
+        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, deleted.id)
+            .unwrap();
+
+        assert!(!fixture.has_screenshot(profile.id, deleted.id));
+        assert!(fixture.has_screenshot(profile.id, kept.id));
+        assert_eq!(fixture.reloaded()[0].trackers[0].pixels, [kept]);
+        assert!(matches!(
+            delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, deleted.id),
+            Err(AppError::NotFound(_))
+        ));
+    }
+
+    #[test]
+    fn deletes_pixel_even_when_its_screenshot_is_gone() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let pixel = fixture.pixel(profile.id, tracker.id);
+        fs::remove_dir_all(fixture.screenshots.profile_dir(profile.id)).unwrap();
+
+        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, pixel.id).unwrap();
+
+        assert!(fixture.reloaded()[0].trackers[0].pixels.is_empty());
     }
 }

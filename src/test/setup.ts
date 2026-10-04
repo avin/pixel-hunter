@@ -19,9 +19,11 @@ vi.stubGlobal(
   })),
 );
 
-afterEach(() => {
+afterEach(async () => {
   // Sonner keeps active toasts in module state and replays them to the next Toaster.
   toast.dismiss();
   cleanup();
+  // Tauri `unlisten` callbacks resolve after unmount and still need the mocked internals.
+  await new Promise((resolve) => setTimeout(resolve, 0));
   clearMocks();
 });

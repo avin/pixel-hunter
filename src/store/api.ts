@@ -1,12 +1,20 @@
 import { createApi } from "@reduxjs/toolkit/query/react";
 import { tauriBaseQuery } from "./tauriBaseQuery";
 import type {
+  Pixel,
+  PixelInput,
   Profile,
   ProfileInput,
   Tracker,
   TrackerInput,
   WindowedProcess,
 } from "./types";
+
+interface PixelArgs {
+  profileId: string;
+  trackerId: string;
+  pixelId: string;
+}
 
 const PROFILE_LIST = { type: "Profile", id: "LIST" } as const;
 
@@ -81,6 +89,49 @@ export const tauriApi = createApi({
         { type: "Profile", id: profileId },
       ],
     }),
+    pixelUpdate: builder.mutation<Pixel, PixelArgs & { input: PixelInput }>({
+      query: ({ profileId, trackerId, pixelId, input }) => ({
+        command: "pixel_update",
+        args: { profileId, trackerId, pixelId, input },
+      }),
+      invalidatesTags: (_result, _error, { profileId }) => [
+        { type: "Profile", id: profileId },
+      ],
+    }),
+    pixelDelete: builder.mutation<void, PixelArgs>({
+      query: ({ profileId, trackerId, pixelId }) => ({
+        command: "pixel_delete",
+        args: { profileId, trackerId, pixelId },
+      }),
+      invalidatesTags: (_result, _error, { profileId }) => [
+        { type: "Profile", id: profileId },
+      ],
+    }),
+    pixelCaptureStart: builder.mutation<
+      void,
+      { profileId: string; trackerId: string }
+    >({
+      query: ({ profileId, trackerId }) => ({
+        command: "pixel_capture_start",
+        args: { profileId, trackerId },
+      }),
+    }),
+    pixelCaptureCancel: builder.mutation<void, void>({
+      query: () => ({ command: "pixel_capture_cancel" }),
+    }),
+    pixelCapturePick: builder.mutation<void, { x: number; y: number }>({
+      query: ({ x, y }) => ({ command: "pixel_capture_pick", args: { x, y } }),
+    }),
+    pixelViewOpen: builder.mutation<void, PixelArgs>({
+      query: ({ profileId, trackerId, pixelId }) => ({
+        command: "pixel_view_open",
+        args: { profileId, trackerId, pixelId },
+      }),
+    }),
+    screenshotsDir: builder.query<string, void>({
+      query: () => ({ command: "screenshots_dir" }),
+      keepUnusedDataFor: Infinity,
+    }),
     listWindowedProcesses: builder.query<WindowedProcess[], void>({
       query: () => ({ command: "windowed_processes_list" }),
       keepUnusedDataFor: 0,
@@ -96,5 +147,12 @@ export const {
   useCreateTrackerMutation,
   useUpdateTrackerMutation,
   useDeleteTrackerMutation,
+  usePixelUpdateMutation,
+  usePixelDeleteMutation,
+  usePixelCaptureStartMutation,
+  usePixelCaptureCancelMutation,
+  usePixelCapturePickMutation,
+  usePixelViewOpenMutation,
+  useScreenshotsDirQuery,
   useListWindowedProcessesQuery,
 } = tauriApi;

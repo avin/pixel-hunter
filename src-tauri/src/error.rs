@@ -5,6 +5,8 @@ pub enum AppError {
     Validation(String),
     NotFound(&'static str),
     Io(std::io::Error),
+    /// Screen capture, screenshot files or windows of the capture flow.
+    Capture(String),
 }
 
 impl fmt::Display for AppError {
@@ -12,6 +14,7 @@ impl fmt::Display for AppError {
         match self {
             AppError::Validation(message) => f.write_str(message),
             AppError::NotFound(message) => f.write_str(message),
+            AppError::Capture(message) => f.write_str(message),
             AppError::Io(error) => write!(f, "Не удалось сохранить конфигурацию: {error}"),
         }
     }

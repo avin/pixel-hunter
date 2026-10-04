@@ -5,6 +5,7 @@ use crate::error::{AppError, AppResult};
 
 pub const CONFIG_VERSION: u32 = 1;
 pub const DEFAULT_RESUME_DELAY_MS: u32 = 1000;
+pub const DEFAULT_TOLERANCE_PERCENT: u8 = 10;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +55,8 @@ pub struct Tracker {
     pub name: String,
     pub pre_action_delay_ms: DelayRange,
     pub resume_delay_ms: u32,
+    #[serde(default)]
+    pub pixels: Vec<Pixel>,
 }
 
 impl Tracker {
@@ -63,6 +66,7 @@ impl Tracker {
             name,
             pre_action_delay_ms: DelayRange::default(),
             resume_delay_ms: DEFAULT_RESUME_DELAY_MS,
+            pixels: Vec::new(),
         }
     }
 
@@ -70,6 +74,54 @@ impl Tracker {
         validate_name(&self.name, "Имя отслеживания не может быть пустым")?;
         self.pre_action_delay_ms.validate()
     }
+}
+
+/// Screen point in physical pixels of the primary monitor, (0, 0) at its top-left corner.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Pixel {
+    pub id: Uuid,
+    pub x: u32,
+    pub y: u32,
+    pub color: Rgb,
+    pub condition: PixelCondition,
+    pub tolerance_percent: u8,
+}
+
+impl Pixel {
+    pub fn new(id: Uuid, x: u32, y: u32, color: Rgb) -> Self {
+        Self {
+            id,
+            x,
+            y,
+            color,
+            condition: PixelCondition::Equals,
+            tolerance_percent: DEFAULT_TOLERANCE_PERCENT,
+        }
+    }
+
+    pub fn validate(&self) -> AppResult<()> {
+        if self.tolerance_percent > 100 {
+            return Err(AppError::Validation(
+                "Допуск должен быть от 0 до 100 процентов".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PixelCondition {
+    Equals,
+    NotEquals,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rgb {
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -149,11 +201,49 @@ mod tests {
                         "name": "Здоровье",
                         "preActionDelayMs": { "min": 100, "max": 300 },
                         "resumeDelayMs": 1000,
+                        "pixels": [],
                     }],
                 }],
             })
         );
         assert_eq!(serde_json::from_value::<Config>(value).unwrap(), config);
+    }
+
+    #[test]
+    fn reads_tracker_saved_before_pixels_existed() {
+        let tracker: Tracker =
+            serde_json::from_value(tracker_json(json!({ "min": 100, "max": 300 }), 1000)).unwrap();
+
+        assert!(tracker.pixels.is_empty());
+    }
+
+    #[test]
+    fn serializes_pixel_in_camel_case() {
+        let id = Uuid::new_v4();
+        let mut pixel = Pixel::new(id, 812, 1040, Rgb { r: 200, g: 30, b: 30 });
+        pixel.condition = PixelCondition::NotEquals;
+
+        assert_eq!(
+            serde_json::to_value(&pixel).unwrap(),
+            json!({
+                "id": id,
+                "x": 812,
+                "y": 1040,
+                "color": { "r": 200, "g": 30, "b": 30 },
+                "condition": "notEquals",
+                "tolerancePercent": 10,
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_tolerance_above_100_percent() {
+        let mut pixel = Pixel::new(Uuid::new_v4(), 0, 0, Rgb { r: 0, g: 0, b: 0 });
+
+        pixel.tolerance_percent = 100;
+        assert!(pixel.validate().is_ok());
+        pixel.tolerance_percent = 101;
+        assert!(pixel.validate().is_err());
     }
 
     #[test]
