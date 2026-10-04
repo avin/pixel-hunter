@@ -20,6 +20,7 @@ vi.stubGlobal(
 );
 
 afterEach(async () => {
+  vi.useRealTimers();
   // Sonner keeps active toasts in module state and replays them to the next Toaster.
   toast.dismiss();
   cleanup();

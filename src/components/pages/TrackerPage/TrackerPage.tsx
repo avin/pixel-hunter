@@ -7,6 +7,7 @@ import { RunToggle } from "@/components/pages/ProfilePage/RunToggle/RunToggle";
 import { ActionSection } from "./ActionSection/ActionSection";
 import { PixelsSection } from "./PixelsSection/PixelsSection";
 import { TrackerForm } from "./TrackerForm/TrackerForm";
+import { TrackerSplit } from "./TrackerSplit/TrackerSplit";
 
 export function TrackerPage() {
   const { profileId = "", trackerId = "" } = useParams();
@@ -65,14 +66,16 @@ export function TrackerPage() {
         <RunToggle profileId={profileId} tracker={tracker} />
       </div>
       <TrackerForm key={`${profileId}/${tracker.id}`} profileId={profileId} tracker={tracker} />
-      <div className="grid min-h-0 flex-1 grid-rows-2 gap-2 p-2">
-      <PixelsSection
-        profileId={profileId}
-        processName={profile.processName}
-        tracker={tracker}
+      <TrackerSplit
+        pixels={
+          <PixelsSection
+            profileId={profileId}
+            processName={profile.processName}
+            tracker={tracker}
+          />
+        }
+        action={<ActionSection profileId={profileId} tracker={tracker} />}
       />
-      <ActionSection profileId={profileId} tracker={tracker} />
-      </div>
     </div>
   );
 }

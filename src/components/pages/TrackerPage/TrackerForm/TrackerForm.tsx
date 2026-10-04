@@ -12,7 +12,6 @@ import {
   FieldSet,
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import { useErrorReveal } from "@/hooks/useErrorReveal";
 import { delayRangeError, millisecondsError } from "@/lib/delayRange";
 import { useUpdateTrackerMutation } from "@/store/api";
 import type { Tracker } from "@/store/types";
@@ -42,6 +41,23 @@ function validateTracker(values: Readonly<Values>): Errors {
   };
 }
 
+function trackerInput(values: Readonly<Values>) {
+  return {
+    name: values.name.trim(),
+    preActionDelayMs: { min: Number(values.delayMin), max: Number(values.delayMax) },
+    resumeDelayMs: Number(values.resumeDelay),
+  };
+}
+
+function settingsKey(values: Readonly<Values>) {
+  return JSON.stringify(trackerInput(values));
+}
+
+function firstInvalidField(values: Readonly<Values>) {
+  const errors = validateTracker(values);
+  return FIELD_ORDER.find((field) => errors[field]);
+}
+
 export function TrackerForm({ profileId, tracker }: Props) {
   const form = useForm<Values>({
     name: tracker.name,
@@ -50,15 +66,24 @@ export function TrackerForm({ profileId, tracker }: Props) {
     resumeDelay: String(tracker.resumeDelayMs),
   });
   const values = useFormWatch(form);
-  const baseline = useRef(form.values);
-  const isSaving = useRef(false);
+  const baseline = useRef(settingsKey(form.values));
+  const pendingSave = useRef<Promise<boolean> | null>(null);
+  const lastChange = useRef(0);
+  const failedDraft = useRef<Readonly<Values> | null>(null);
+  const leaving = useRef(false);
+  const mounted = useRef(true);
+  const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string>();
-  const { setIsLeaving } = useWorkspaceNavigation();
-  const isDirty = (Object.keys(values) as (keyof Values)[]).some((key) => values[key] !== baseline.current[key]);
-  const blocker = useBlocker(({ currentLocation, nextLocation }) => currentLocation.pathname !== nextLocation.pathname && (isDirty || isSaving.current));
+  const { isLeaving, setIsLeaving } = useWorkspaceNavigation();
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    currentLocation.pathname !== nextLocation.pathname &&
+    (settingsKey(form.values) !== baseline.current ||
+      firstInvalidField(form.values) !== undefined ||
+      pendingSave.current !== null),
+  );
   const { errors } = useFormValidation(form, validateTracker);
-  const reveal = useErrorReveal<ErrorField>();
-  const [updateTracker, { isLoading }] = useUpdateTrackerMutation();
+  const [revealed, setRevealed] = useState<ReadonlySet<ErrorField>>(() => new Set());
+  const [updateTracker] = useUpdateTrackerMutation();
 
   const ids = {
     name: useId(),
@@ -69,27 +94,64 @@ export function TrackerForm({ profileId, tracker }: Props) {
     resumeDelay: useId(),
     resumeDelayError: useId(),
   };
-  const nameError = reveal.visibleError(errors, "name");
-  const delayError = reveal.visibleError(errors, "preActionDelay");
-  const resumeDelayError = reveal.visibleError(errors, "resumeDelay");
+  const nameError = revealed.has("name") ? errors.name : undefined;
+  const delayError = revealed.has("preActionDelay") ? errors.preActionDelay : undefined;
+  const resumeDelayError = revealed.has("resumeDelay") ? errors.resumeDelay : undefined;
 
   function setField(field: keyof Values, errorField: ErrorField) {
     return (event: React.ChangeEvent<HTMLInputElement>) => {
       setSaveError(undefined);
+      failedDraft.current = null;
+      lastChange.current = Date.now();
       form.setValue(field, event.currentTarget.value);
-      reveal.change(errorField);
+      setRevealed((current) => current.has(errorField) ? current : new Set([...current, errorField]));
     };
   }
 
-  function blurField(errorField: ErrorField) {
-    reveal.blur(errorField, validateTracker(form.values));
+  function saveDraft(): Promise<boolean> {
+    if (pendingSave.current) return pendingSave.current;
+    const draft = form.values;
+    if (firstInvalidField(draft)) return Promise.resolve(false);
+    const key = settingsKey(draft);
+    if (key === baseline.current) return Promise.resolve(true);
+    setIsSaving(true);
+    setSaveError(undefined);
+    const request = updateTracker({ profileId, trackerId: tracker.id, input: trackerInput(draft) })
+      .then((result) => {
+        if ("error" in result) {
+          failedDraft.current = draft;
+          const error = result.error;
+          if (mounted.current) setSaveError(error && "message" in error ? String(error.message) : "Не удалось сохранить настройки");
+          return false;
+        }
+        baseline.current = key;
+        return true;
+      }).finally(() => {
+        pendingSave.current = null;
+        if (mounted.current) setIsSaving(false);
+      });
+    pendingSave.current = request;
+    return request;
   }
 
   useEffect(() => {
-    if (blocker.state !== "blocked" || isSaving.current) return;
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+
+  useEffect(() => {
+    if (leaving.current || pendingSave.current || failedDraft.current === values ||
+        settingsKey(values) === baseline.current || firstInvalidField(values)) return;
+    const timeout = window.setTimeout(() => { void saveDraft(); }, Math.max(0, 500 - (Date.now() - lastChange.current)));
+    return () => window.clearTimeout(timeout);
+  }, [values, isSaving, blocker.state]);
+
+  useEffect(() => {
+    if (blocker.state !== "blocked" || leaving.current) return;
     const transition = blocker;
-    const firstInvalid = reveal.submit(validateTracker(form.values), FIELD_ORDER);
+    const firstInvalid = firstInvalidField(form.values);
     if (firstInvalid) {
+      setRevealed(new Set(FIELD_ORDER));
       const fieldId = {
         name: ids.name,
         preActionDelay: ids.delayMin,
@@ -99,35 +161,26 @@ export function TrackerForm({ profileId, tracker }: Props) {
       transition.reset();
       return;
     }
-    isSaving.current = true;
+    leaving.current = true;
     setIsLeaving(true);
     setSaveError(undefined);
-    const draft = form.values;
-    void updateTracker({
-      profileId,
-      trackerId: tracker.id,
-      input: {
-        name: draft.name.trim(),
-        preActionDelayMs: { min: Number(draft.delayMin), max: Number(draft.delayMax) },
-        resumeDelayMs: Number(draft.resumeDelay),
-      },
-    }).then((result) => {
-      isSaving.current = false;
+    void (async () => {
+      const previousSucceeded = pendingSave.current ? await pendingSave.current : true;
+      const succeeded = previousSucceeded && await saveDraft();
+      if (!mounted.current) return;
+      leaving.current = false;
       setIsLeaving(false);
-      if ("error" in result) {
-        const error = result.error;
-        setSaveError(error && "message" in error ? String(error.message) : "Не удалось сохранить настройки");
+      if (!succeeded) {
         transition.reset();
       } else {
-        baseline.current = draft;
         transition.proceed();
       }
-    });
+    })();
   }, [blocker]);
 
   return (
     <form noValidate onSubmit={(event) => event.preventDefault()} aria-label="Настройки отслеживания" className="shrink-0 border-b p-3">
-      <fieldset disabled={isLoading} className="min-w-0">
+      <fieldset disabled={isLeaving} className="min-w-0">
       <FieldGroup className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] items-start gap-3">
         <Field data-invalid={nameError ? true : undefined}>
           <FieldLabel htmlFor={ids.name}>Имя</FieldLabel>
@@ -138,18 +191,11 @@ export function TrackerForm({ profileId, tracker }: Props) {
             aria-invalid={nameError ? true : undefined}
             aria-describedby={nameError ? ids.nameError : undefined}
             onChange={setField("name", "name")}
-            onBlur={() => blurField("name")}
           />
           {nameError && <FieldError id={ids.nameError}>{nameError}</FieldError>}
         </Field>
 
-        <FieldSet
-          onBlur={(event) => {
-            if (!event.currentTarget.contains(event.relatedTarget)) {
-              blurField("preActionDelay");
-            }
-          }}
-        >
+        <FieldSet>
           <FieldLegend variant="label">Задержка перед действием, мс</FieldLegend>
           <FieldDescription>
             Перед действием выдерживается случайная пауза из этого диапазона.
@@ -201,7 +247,6 @@ export function TrackerForm({ profileId, tracker }: Props) {
             aria-invalid={resumeDelayError ? true : undefined}
             aria-describedby={resumeDelayError ? ids.resumeDelayError : undefined}
             onChange={setField("resumeDelay", "resumeDelay")}
-            onBlur={() => blurField("resumeDelay")}
           />
           <FieldDescription>
             Сколько ждать после действия, прежде чем снова проверять пиксели.
@@ -213,7 +258,7 @@ export function TrackerForm({ profileId, tracker }: Props) {
       </FieldGroup>
 
       </fieldset>
-      {isLoading && <p role="status" className="mt-2 text-muted-foreground">Сохранение…</p>}
+      {(isSaving || isLeaving) && <p role="status" className="mt-2 text-muted-foreground">Сохранение…</p>}
       {saveError && <p role="alert" className="mt-2 text-destructive">{saveError}</p>}
     </form>
   );

@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { trackerPath } from "@/components/app/AppRouter/paths";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
 import {
   Table,
   TableBody,
@@ -112,10 +113,13 @@ export function ProfilePage() {
             <Trash2 />
           </Button>
           {profile.trackers.length > 0 && (
-            <Button onClick={openCreateDialog}>
-              <Plus />
-              Создать отслеживание
-            </Button>
+            <>
+              <Separator orientation="vertical" className="mx-2" aria-hidden="true" />
+              <Button onClick={openCreateDialog}>
+                <Plus />
+                Создать отслеживание
+              </Button>
+            </>
           )}
         </div>
       </div>

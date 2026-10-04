@@ -1,5 +1,6 @@
-import { act, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { act, cleanup, configure, getConfig, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Tracker } from "@/store/types";
 import {
   createFakeBackend,
@@ -25,6 +26,26 @@ const maxInput = () => screen.getByRole("spinbutton", { name: "Максимум"
 const pauseInput = () =>
   screen.getByRole("spinbutton", { name: "Пауза до возобновления опроса, мс" });
 const exitLink = () => screen.getByRole("link", { name: "Назад" });
+
+const asyncWrapper = getConfig().asyncWrapper;
+afterEach(() => {
+  vi.useRealTimers();
+  configure({ asyncWrapper });
+});
+
+function timedUser() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  configure({ asyncWrapper: async (callback) => {
+    let result!: Awaited<ReturnType<typeof callback>>;
+    await act(async () => { result = await callback(); });
+    return result;
+  } });
+  return userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+}
+
+async function advance(ms: number) {
+  await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+}
 
 describe("TrackerPage", () => {
   it("shows default timings of a new tracker", async () => {
@@ -88,20 +109,177 @@ describe("TrackerPage", () => {
     expect(backend.state.profiles[0].trackers[0]).toEqual(tracker);
   });
 
-  it("shows the range error only after focus leaves the range", async () => {
+  it("shows and clears range errors during typing", async () => {
     const { user } = await openTracker();
 
     await user.clear(minInput());
     await user.type(minInput(), "500");
-    await user.click(maxInput());
-    expect(screen.queryByText("Минимум не может быть больше максимума")).not.toBeInTheDocument();
-
-    await user.click(pauseInput());
+    expect(minInput()).toHaveFocus();
     expect(screen.getByText("Минимум не может быть больше максимума")).toBeInTheDocument();
 
     await user.clear(maxInput());
     await user.type(maxInput(), "600");
     expect(screen.queryByText("Минимум не может быть больше максимума")).not.toBeInTheDocument();
+  });
+
+  it("debounces the latest settings without blur or exit", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    await user.type(nameInput(), " новый{Enter}");
+    await user.tab();
+    await advance(499);
+    expect(backend.callsOf("tracker_update")).toHaveLength(0);
+    await user.clear(pauseInput());
+    await user.type(pauseInput(), "2000");
+    await advance(499);
+    expect(backend.callsOf("tracker_update")).toHaveLength(0);
+    await advance(1);
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+    expect(backend.state.profiles[0].trackers[0]).toMatchObject({ name: "Здоровье новый", resumeDelayMs: 2000 });
+    await user.click(exitLink());
+    await advance(1000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+  });
+
+  it("skips equivalent and reverted drafts", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    await user.type(nameInput(), " новый");
+    await advance(300);
+    await user.clear(nameInput());
+    await user.type(nameInput(), " Здоровье ");
+    await advance(1000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(0);
+  });
+
+  it.each(["", "-1", "1.5", "4294967296"])("keeps invalid pause %s local until corrected", async (value) => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    await user.clear(pauseInput());
+    if (value) await user.type(pauseInput(), value);
+    expect(pauseInput()).toHaveFocus();
+    expect(pauseInput()).toHaveAttribute("aria-invalid", "true");
+    expect(pauseInput()).toHaveAccessibleDescription();
+    await advance(1000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(0);
+    await user.clear(pauseInput());
+    await user.type(pauseInput(), "0");
+    expect(pauseInput()).not.toHaveAttribute("aria-invalid", "true");
+    await advance(500);
+    expect(backend.state.profiles[0].trackers[0].resumeDelayMs).toBe(0);
+  });
+
+  it("does not partially save a draft with an empty name", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    await user.clear(pauseInput());
+    await user.type(pauseInput(), "50");
+    await user.clear(nameInput());
+    expect(nameInput()).toHaveAttribute("aria-invalid", "true");
+    await advance(500);
+    expect(backend.callsOf("tracker_update")).toHaveLength(0);
+    expect(backend.state.profiles[0].trackers[0].resumeDelayMs).toBe(1000);
+  });
+
+  it("keeps new input while saving and serializes the next draft", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    const release = backend.hold("tracker_update");
+    await user.type(nameInput(), " первый");
+    await advance(500);
+    expect(nameInput()).toBeEnabled();
+    expect(screen.getByText("Сохранение…")).toBeInTheDocument();
+    await user.type(nameInput(), " второй");
+    await advance(300);
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+    await act(async () => { release(); });
+    expect(nameInput()).toHaveValue("Здоровье первый второй");
+    await advance(199);
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+    await advance(1);
+    expect(backend.callsOf("tracker_update")).toHaveLength(2);
+    expect(backend.state.profiles[0].trackers[0].name).toBe("Здоровье первый второй");
+  });
+
+  it("preserves invalid new input after a successful older save", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    const release = backend.hold("tracker_update");
+    await user.type(nameInput(), " новый");
+    await advance(500);
+    await user.clear(nameInput());
+    await advance(500);
+    await act(async () => { release(); });
+    await advance(1000);
+    expect(nameInput()).toHaveValue("");
+    expect(nameInput()).toHaveAttribute("aria-invalid", "true");
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+  });
+
+  it("flushes the latest draft after an in-flight save before leaving", async () => {
+    const { backend, router } = await openTracker();
+    const user = timedUser();
+    const release = backend.hold("tracker_update");
+    await user.type(nameInput(), " первый");
+    await advance(500);
+    await user.type(nameInput(), " второй");
+    await user.click(exitLink());
+    expect(nameInput()).toBeDisabled();
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+    await act(async () => { release(); });
+    await advance(0);
+    expect(router.state.location.pathname).toBe("/profiles/profile-1");
+    expect(backend.callsOf("tracker_update")).toHaveLength(2);
+    expect(backend.state.profiles[0].trackers[0].name).toBe("Здоровье первый второй");
+    await advance(1000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(2);
+  });
+
+  it("stops failed background retries and retries after input or exit", async () => {
+    const { backend, router } = await openTracker();
+    const user = timedUser();
+    backend.failOn("tracker_update", "Диск недоступен");
+    await user.type(nameInput(), " новый");
+    await advance(500);
+    expect(screen.getByText("Диск недоступен", { selector: "p" })).toBeInTheDocument();
+    await advance(5000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(1);
+    await user.type(nameInput(), " ещё");
+    await advance(500);
+    expect(backend.callsOf("tracker_update")).toHaveLength(2);
+    backend.failOn("tracker_update", undefined);
+    await user.click(exitLink());
+    await advance(0);
+    expect(router.state.location.pathname).toBe("/profiles/profile-1");
+    expect(backend.callsOf("tracker_update")).toHaveLength(3);
+  });
+
+  it("retries the new draft after an older held request fails", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    const release = backend.hold("tracker_update");
+    backend.failOn("tracker_update", "Диск недоступен");
+    await user.type(nameInput(), " первый");
+    await advance(500);
+    await user.type(nameInput(), " второй");
+    await advance(300);
+    await act(async () => { release(); });
+    expect(nameInput()).toHaveValue("Здоровье первый второй");
+    backend.failOn("tracker_update", undefined);
+    await advance(200);
+    expect(backend.callsOf("tracker_update")).toHaveLength(2);
+    expect(backend.state.profiles[0].trackers[0].name).toBe("Здоровье первый второй");
+    await advance(1000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(2);
+  });
+
+  it("cancels pending debounce when the editor unmounts", async () => {
+    const { backend } = await openTracker();
+    const user = timedUser();
+    await user.type(nameInput(), " новый");
+    cleanup();
+    await advance(1000);
+    expect(backend.callsOf("tracker_update")).toHaveLength(0);
   });
 
   it("rejects a negative pause", async () => {
@@ -205,7 +383,7 @@ describe("TrackerPage", () => {
     await user.click(screen.getByRole("button", { name: "Добавить нажатие" }));
     await user.keyboard("w");
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].action.steps).toHaveLength(2));
-    await user.click(screen.getByRole("button", { name: "Запуск отслеживания «Здоровье»" }));
+    await user.click(screen.getByRole("button", { name: /^Запуск отслеживания/ }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true));
     expect(nameInput()).toHaveValue("Здоровье новый");
     await user.click(exitLink());
