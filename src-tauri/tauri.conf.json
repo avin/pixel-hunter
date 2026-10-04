@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "hello-app",
+  "productName": "Pixel Hunter",
   "version": "0.1.0",
-  "identifier": "com.avin.hello-app",
+  "identifier": "com.avin.pixel-hunter",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,9 +12,11 @@
   "app": {
     "windows": [
       {
-        "title": "hello-app",
-        "width": 800,
-        "height": 600
+        "title": "Pixel Hunter",
+        "width": 1100,
+        "height": 750,
+        "minWidth": 900,
+        "minHeight": 600
       }
     ],
     "security": {
