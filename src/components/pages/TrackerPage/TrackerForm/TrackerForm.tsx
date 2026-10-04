@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { useErrorReveal } from "@/hooks/useErrorReveal";
+import { delayRangeError, millisecondsError } from "@/lib/delayRange";
 import { useUpdateTrackerMutation } from "@/store/api";
 import type { Tracker } from "@/store/types";
 
@@ -32,29 +33,11 @@ type ErrorField = "name" | "preActionDelay" | "resumeDelay";
 type Errors = Partial<Record<ErrorField, string>>;
 
 const FIELD_ORDER: readonly ErrorField[] = ["name", "preActionDelay", "resumeDelay"];
-const MAX_MS = 4_294_967_295;
-
-function millisecondsError(value: string) {
-  if (!/^\d+$/.test(value.trim())) {
-    return "Введите целое неотрицательное число";
-  }
-  if (Number(value) > MAX_MS) {
-    return "Слишком большое значение";
-  }
-  return undefined;
-}
 
 function validateTracker(values: Readonly<Values>): Errors {
-  const delayError =
-    millisecondsError(values.delayMin) ?? millisecondsError(values.delayMax);
-  const isRangeReversed =
-    !delayError && Number(values.delayMin) > Number(values.delayMax);
-
   return {
     name: values.name.trim() ? undefined : "Введите имя отслеживания",
-    preActionDelay: isRangeReversed
-      ? "Минимум не может быть больше максимума"
-      : delayError,
+    preActionDelay: delayRangeError(values.delayMin, values.delayMax),
     resumeDelay: millisecondsError(values.resumeDelay),
   };
 }

@@ -1,5 +1,8 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
+  Action,
+  KeyCodeInfo,
+  KeyStep,
   Pixel,
   PixelInput,
   Profile,
@@ -17,6 +20,21 @@ interface Options {
 type Args = Record<string, unknown>;
 
 export const SCREENSHOTS_DIR = "C:\\data\\screenshots";
+
+/** A subset of the Rust key table. */
+export const KEY_CODES: KeyCodeInfo[] = [
+  { code: "Escape", label: "Esc" },
+  { code: "Digit1", label: "1" },
+  { code: "Enter", label: "Enter" },
+  { code: "KeyQ", label: "Q" },
+  { code: "KeyW", label: "W" },
+  { code: "KeyE", label: "E" },
+  { code: "KeyA", label: "A" },
+  { code: "ControlLeft", label: "Ctrl" },
+  { code: "ShiftLeft", label: "Shift" },
+  { code: "AltLeft", label: "Alt" },
+  { code: "F5", label: "F5" },
+];
 
 /** In-memory stand-in for the Rust commands, installed through `mockIPC`. */
 export function createFakeBackend({ profiles = [], processes = [] }: Options = {}) {
@@ -80,6 +98,7 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
           preActionDelayMs: { min: 100, max: 300 },
           resumeDelayMs: 1000,
           pixels: [],
+          action: { type: "keySequence", steps: [] },
         };
         findProfile(args.profileId).trackers.push(tracker);
         return structuredClone(tracker);
@@ -97,6 +116,15 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
         );
         return null;
       }
+      case "action_update": {
+        const tracker = findTracker(args.profileId, args.trackerId);
+        const action = structuredClone(args.action as Action);
+        if (action.steps[0]) action.steps[0].delayBeforeMs = null;
+        tracker.action = action;
+        return structuredClone(action);
+      }
+      case "key_codes_list":
+        return structuredClone(KEY_CODES);
       case "pixel_update": {
         const pixel = findPixel(args);
         Object.assign(pixel, args.input as PixelInput);
@@ -183,6 +211,16 @@ export function trackerFixture(overrides: Partial<Tracker> = {}): Tracker {
     preActionDelayMs: { min: 100, max: 300 },
     resumeDelayMs: 1000,
     pixels: [],
+    action: { type: "keySequence", steps: [] },
+    ...overrides,
+  };
+}
+
+export function keyStepFixture(overrides: Partial<KeyStep> = {}): KeyStep {
+  return {
+    id: "step-1",
+    delayBeforeMs: null,
+    combo: { modifiers: [], key: "KeyQ" },
     ...overrides,
   };
 }

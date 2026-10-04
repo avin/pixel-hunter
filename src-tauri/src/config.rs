@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::action::Action;
 use crate::error::{AppError, AppResult};
 
 pub const CONFIG_VERSION: u32 = 1;
@@ -57,6 +58,8 @@ pub struct Tracker {
     pub resume_delay_ms: u32,
     #[serde(default)]
     pub pixels: Vec<Pixel>,
+    #[serde(default)]
+    pub action: Action,
 }
 
 impl Tracker {
@@ -67,6 +70,7 @@ impl Tracker {
             pre_action_delay_ms: DelayRange::default(),
             resume_delay_ms: DEFAULT_RESUME_DELAY_MS,
             pixels: Vec::new(),
+            action: Action::default(),
         }
     }
 
@@ -202,6 +206,7 @@ mod tests {
                         "preActionDelayMs": { "min": 100, "max": 300 },
                         "resumeDelayMs": 1000,
                         "pixels": [],
+                        "action": { "type": "keySequence", "steps": [] },
                     }],
                 }],
             })
@@ -215,6 +220,14 @@ mod tests {
             serde_json::from_value(tracker_json(json!({ "min": 100, "max": 300 }), 1000)).unwrap();
 
         assert!(tracker.pixels.is_empty());
+    }
+
+    #[test]
+    fn reads_tracker_saved_before_actions_existed() {
+        let tracker: Tracker =
+            serde_json::from_value(tracker_json(json!({ "min": 100, "max": 300 }), 1000)).unwrap();
+
+        assert_eq!(tracker.action, Action::default());
     }
 
     #[test]

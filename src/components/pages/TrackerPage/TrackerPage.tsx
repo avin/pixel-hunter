@@ -3,6 +3,7 @@ import { profilePath } from "@/components/app/AppRouter/paths";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useListProfilesQuery } from "@/store/api";
+import { ActionSection } from "./ActionSection/ActionSection";
 import { PixelsSection } from "./PixelsSection/PixelsSection";
 import { TrackerForm } from "./TrackerForm/TrackerForm";
 
@@ -64,6 +65,7 @@ export function TrackerPage() {
         processName={profile.processName}
         tracker={tracker}
       />
+      <ActionSection profileId={profileId} tracker={tracker} />
     </div>
   );
 }

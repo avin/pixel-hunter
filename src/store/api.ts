@@ -1,6 +1,8 @@
 import { createApi } from "@reduxjs/toolkit/query/react";
 import { tauriBaseQuery } from "./tauriBaseQuery";
 import type {
+  Action,
+  KeyCodeInfo,
   Pixel,
   PixelInput,
   Profile,
@@ -89,6 +91,22 @@ export const tauriApi = createApi({
         { type: "Profile", id: profileId },
       ],
     }),
+    actionUpdate: builder.mutation<
+      Action,
+      { profileId: string; trackerId: string; action: Action }
+    >({
+      query: ({ profileId, trackerId, action }) => ({
+        command: "action_update",
+        args: { profileId, trackerId, action },
+      }),
+      invalidatesTags: (_result, _error, { profileId }) => [
+        { type: "Profile", id: profileId },
+      ],
+    }),
+    keyCodesList: builder.query<KeyCodeInfo[], void>({
+      query: () => ({ command: "key_codes_list" }),
+      keepUnusedDataFor: Infinity,
+    }),
     pixelUpdate: builder.mutation<Pixel, PixelArgs & { input: PixelInput }>({
       query: ({ profileId, trackerId, pixelId, input }) => ({
         command: "pixel_update",
@@ -147,6 +165,8 @@ export const {
   useCreateTrackerMutation,
   useUpdateTrackerMutation,
   useDeleteTrackerMutation,
+  useActionUpdateMutation,
+  useKeyCodesListQuery,
   usePixelUpdateMutation,
   usePixelDeleteMutation,
   usePixelCaptureStartMutation,

@@ -1,9 +1,11 @@
 use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
+use crate::action::Action;
 use crate::config::{Pixel, Profile, Tracker};
 use crate::config_store::ConfigStore;
 use crate::error::AppResult;
+use crate::key_codes::{self, KeyCodeInfo};
 use crate::pixel_capture::{self, CaptureCommand, CaptureRequest, PixelCapture};
 use crate::processes::{self, WindowedProcess};
 use crate::profiles::{self, PixelInput, ProfileInput, TrackerInput};
@@ -65,6 +67,39 @@ pub fn tracker_delete(
     tracker_id: Uuid,
 ) -> AppResult<()> {
     profiles::delete_tracker(&store, &screenshots, profile_id, tracker_id)
+}
+
+#[tauri::command]
+pub fn action_update(
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    action: Action,
+) -> AppResult<Action> {
+    profiles::update_action(&store, profile_id, tracker_id, action)
+}
+
+#[tauri::command]
+pub fn key_codes_list() -> Vec<KeyCodeInfo> {
+    key_codes::list()
+}
+
+/// Plays the tracker's action 3 seconds later, leaving time to switch to the target window.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub fn debug_run_action(
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+) -> AppResult<()> {
+    let action = profiles::get_action(&store, profile_id, tracker_id)?;
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        if let Err(error) = crate::keyboard::run_action(&action) {
+            eprintln!("Действие не выполнено: {error}");
+        }
+    });
+    Ok(())
 }
 
 #[tauri::command]

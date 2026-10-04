@@ -1,8 +1,12 @@
+mod action;
 mod commands;
 mod config;
 mod config_store;
 mod error;
 mod foreground;
+mod key_codes;
+mod key_sequence;
+mod keyboard;
 mod pixel_capture;
 mod processes;
 mod profiles;
@@ -42,6 +46,10 @@ pub fn run() {
             commands::tracker_create,
             commands::tracker_update,
             commands::tracker_delete,
+            commands::action_update,
+            commands::key_codes_list,
+            #[cfg(debug_assertions)]
+            commands::debug_run_action,
             commands::pixel_update,
             commands::pixel_delete,
             commands::pixel_capture_start,

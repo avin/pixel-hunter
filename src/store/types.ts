@@ -36,12 +36,37 @@ export type CaptureStatus =
   | { phase: "timeout" }
   | { phase: "failed"; reason: string };
 
+export type Modifier = "ctrl" | "shift" | "alt";
+
+/** `key` is a physical key in `KeyboardEvent.code` terms, e.g. `KeyQ` or `ShiftLeft`. */
+export interface KeyCombo {
+  modifiers: Modifier[];
+  key: string;
+}
+
+/** Only the first step has no delay. */
+export interface KeyStep {
+  id: string;
+  delayBeforeMs: DelayRange | null;
+  combo: KeyCombo;
+}
+
+export type Action = { type: "keySequence"; steps: KeyStep[] };
+
+export type ActionType = Action["type"];
+
+export interface KeyCodeInfo {
+  code: string;
+  label: string;
+}
+
 export interface Tracker {
   id: string;
   name: string;
   preActionDelayMs: DelayRange;
   resumeDelayMs: number;
   pixels: Pixel[];
+  action: Action;
 }
 
 export interface Profile {

@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
+use crate::action::Action;
 use crate::config::{Config, DelayRange, Pixel, PixelCondition, Profile, Tracker};
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
@@ -91,6 +92,36 @@ pub fn update_tracker(
         updated.validate()?;
         *tracker = updated.clone();
         Ok(updated)
+    })
+}
+
+/// Replaces the whole action; returns it normalized as stored.
+pub fn update_action(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    mut action: Action,
+) -> AppResult<Action> {
+    action.normalize();
+    action.validate()?;
+    store.update(|config| {
+        find_tracker(config, profile_id, tracker_id)?.action = action.clone();
+        Ok(action)
+    })
+}
+
+pub fn get_action(store: &ConfigStore, profile_id: Uuid, tracker_id: Uuid) -> AppResult<Action> {
+    store.read(|config| {
+        config
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+            .ok_or(PROFILE_NOT_FOUND)?
+            .trackers
+            .iter()
+            .find(|tracker| tracker.id == tracker_id)
+            .map(|tracker| tracker.action.clone())
+            .ok_or(TRACKER_NOT_FOUND)
     })
 }
 
@@ -233,6 +264,7 @@ fn find_tracker(config: &mut Config, profile_id: Uuid, tracker_id: Uuid) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::{KeyCombo, KeySequenceAction, KeyStep};
     use crate::config::Rgb;
     use std::fs;
     use tempfile::TempDir;
@@ -448,6 +480,85 @@ mod tests {
             tracker_input("", 100, 300, 1000),
         ));
         assert_eq!(fixture.reloaded()[0].trackers, [tracker]);
+    }
+
+    fn key_sequence(steps: &[(&str, Option<DelayRange>)]) -> Action {
+        Action::KeySequence(KeySequenceAction {
+            steps: steps
+                .iter()
+                .map(|(key, delay)| KeyStep {
+                    id: Uuid::new_v4(),
+                    delay_before_ms: *delay,
+                    combo: KeyCombo {
+                        modifiers: vec![],
+                        key: (*key).into(),
+                    },
+                })
+                .collect(),
+        })
+    }
+
+    #[test]
+    fn creates_tracker_with_empty_key_sequence() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+
+        assert_eq!(tracker.action, key_sequence(&[]));
+    }
+
+    #[test]
+    fn saves_normalized_action() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+        let delay = Some(DelayRange { min: 300, max: 600 });
+
+        let saved = update_action(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            key_sequence(&[("KeyW", delay), ("KeyE", delay)]),
+        )
+        .unwrap();
+
+        let Action::KeySequence(sequence) = &saved;
+        assert_eq!(sequence.steps[0].delay_before_ms, None);
+        assert_eq!(sequence.steps[1].delay_before_ms, delay);
+        assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
+    }
+
+    #[test]
+    fn rejects_action_with_unknown_key_or_reversed_delay() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+
+        assert_validation_error(update_action(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            key_sequence(&[("PrintScreen", None)]),
+        ));
+        assert_validation_error(update_action(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            key_sequence(&[("KeyQ", None), ("KeyW", Some(DelayRange { min: 600, max: 300 }))]),
+        ));
+        assert_eq!(fixture.reloaded()[0].trackers[0].action, key_sequence(&[]));
+    }
+
+    #[test]
+    fn reports_missing_tracker_for_action() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+
+        assert!(matches!(
+            update_action(&fixture.store, profile.id, Uuid::new_v4(), key_sequence(&[])),
+            Err(AppError::NotFound(_))
+        ));
     }
 
     #[test]
