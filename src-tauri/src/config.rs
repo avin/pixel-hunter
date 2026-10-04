@@ -60,6 +60,25 @@ pub struct Tracker {
     pub pixels: Vec<Pixel>,
     #[serde(default)]
     pub action: Action,
+    /// Chosen by the user; the engine runs the tracker only while it is also complete.
+    #[serde(default)]
+    pub is_running: bool,
+}
+
+/// Part of the tracker that must be configured before it can run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MissingPart {
+    Pixels,
+    ActionSteps,
+}
+
+impl MissingPart {
+    pub fn message(self) -> &'static str {
+        match self {
+            MissingPart::Pixels => "Добавьте пиксель, чтобы запустить отслеживание",
+            MissingPart::ActionSteps => "Добавьте шаг действия, чтобы запустить отслеживание",
+        }
+    }
 }
 
 impl Tracker {
@@ -71,12 +90,34 @@ impl Tracker {
             resume_delay_ms: DEFAULT_RESUME_DELAY_MS,
             pixels: Vec::new(),
             action: Action::default(),
+            is_running: false,
         }
     }
 
     pub fn validate(&self) -> AppResult<()> {
         validate_name(&self.name, "Имя отслеживания не может быть пустым")?;
         self.pre_action_delay_ms.validate()
+    }
+
+    pub fn missing_part(&self) -> Option<MissingPart> {
+        if self.pixels.is_empty() {
+            Some(MissingPart::Pixels)
+        } else if self.action.is_empty() {
+            Some(MissingPart::ActionSteps)
+        } else {
+            None
+        }
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.missing_part().is_none()
+    }
+
+    /// A tracker that lost its last pixel or step stops instead of staying "running" but idle.
+    pub fn stop_if_incomplete(&mut self) {
+        if !self.is_complete() {
+            self.is_running = false;
+        }
     }
 }
 
@@ -207,6 +248,7 @@ mod tests {
                         "resumeDelayMs": 1000,
                         "pixels": [],
                         "action": { "type": "keySequence", "steps": [] },
+                        "isRunning": false,
                     }],
                 }],
             })
@@ -228,6 +270,54 @@ mod tests {
             serde_json::from_value(tracker_json(json!({ "min": 100, "max": 300 }), 1000)).unwrap();
 
         assert_eq!(tracker.action, Action::default());
+    }
+
+    #[test]
+    fn reads_tracker_saved_before_run_state_existed_as_stopped() {
+        let tracker: Tracker =
+            serde_json::from_value(tracker_json(json!({ "min": 100, "max": 300 }), 1000)).unwrap();
+
+        assert!(!tracker.is_running);
+    }
+
+    fn complete_tracker() -> Tracker {
+        let mut tracker = Tracker::new("Здоровье".into());
+        tracker
+            .pixels
+            .push(Pixel::new(Uuid::new_v4(), 0, 0, Rgb { r: 0, g: 0, b: 0 }));
+        tracker.action = serde_json::from_value(json!({
+            "type": "keySequence",
+            "steps": [{ "id": Uuid::new_v4(), "delayBeforeMs": null, "combo": { "modifiers": [], "key": "KeyQ" } }],
+        }))
+        .unwrap();
+        tracker
+    }
+
+    #[test]
+    fn tracker_is_complete_with_pixels_and_action_steps() {
+        let complete = complete_tracker();
+        let mut without_pixels = complete.clone();
+        without_pixels.pixels.clear();
+        let mut without_steps = complete.clone();
+        without_steps.action = Action::default();
+
+        assert_eq!(complete.missing_part(), None);
+        assert_eq!(without_pixels.missing_part(), Some(MissingPart::Pixels));
+        assert_eq!(without_steps.missing_part(), Some(MissingPart::ActionSteps));
+        assert_eq!(Tracker::new("Новое".into()).missing_part(), Some(MissingPart::Pixels));
+    }
+
+    #[test]
+    fn incomplete_tracker_stops() {
+        let mut tracker = complete_tracker();
+        tracker.is_running = true;
+
+        tracker.stop_if_incomplete();
+        assert!(tracker.is_running);
+
+        tracker.pixels.clear();
+        tracker.stop_if_incomplete();
+        assert!(!tracker.is_running);
     }
 
     #[test]

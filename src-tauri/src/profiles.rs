@@ -105,8 +105,29 @@ pub fn update_action(
     action.normalize();
     action.validate()?;
     store.update(|config| {
-        find_tracker(config, profile_id, tracker_id)?.action = action.clone();
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        tracker.action = action.clone();
+        tracker.stop_if_incomplete();
         Ok(action)
+    })
+}
+
+/// Saves whether the tracker should run; an incomplete tracker cannot be started.
+pub fn set_tracker_running(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    is_running: bool,
+) -> AppResult<Tracker> {
+    store.update(|config| {
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        if is_running {
+            if let Some(missing) = tracker.missing_part() {
+                return Err(AppError::Validation(missing.message().into()));
+            }
+        }
+        tracker.is_running = is_running;
+        Ok(tracker.clone())
     })
 }
 
@@ -190,12 +211,14 @@ pub fn delete_pixel(
     pixel_id: Uuid,
 ) -> AppResult<()> {
     store.update(|config| {
-        let pixels = &mut find_tracker(config, profile_id, tracker_id)?.pixels;
-        let index = pixels
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        let index = tracker
+            .pixels
             .iter()
             .position(|pixel| pixel.id == pixel_id)
             .ok_or(PIXEL_NOT_FOUND)?;
-        pixels.remove(index);
+        tracker.pixels.remove(index);
+        tracker.stop_if_incomplete();
         Ok(())
     })?;
     screenshots.remove_pixel(profile_id, pixel_id);
@@ -652,6 +675,90 @@ mod tests {
             delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, deleted.id),
             Err(AppError::NotFound(_))
         ));
+    }
+
+    /// Tracker with one pixel and one step, ready to run.
+    fn complete_tracker(fixture: &Fixture, profile_id: Uuid) -> (Tracker, Pixel) {
+        let tracker = create_tracker(&fixture.store, profile_id, "Здоровье".into()).unwrap();
+        let pixel = fixture.pixel(profile_id, tracker.id);
+        update_action(&fixture.store, profile_id, tracker.id, key_sequence(&[("KeyQ", None)]))
+            .unwrap();
+        (tracker, pixel)
+    }
+
+    fn is_running(fixture: &Fixture) -> bool {
+        fixture.reloaded()[0].trackers[0].is_running
+    }
+
+    #[test]
+    fn starts_and_stops_a_complete_tracker_persistently() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, _) = complete_tracker(&fixture, profile.id);
+        assert!(!is_running(&fixture));
+
+        let started = set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
+        assert!(started.is_running);
+        assert!(is_running(&fixture));
+
+        set_tracker_running(&fixture.store, profile.id, tracker.id, false).unwrap();
+        assert!(!is_running(&fixture));
+    }
+
+    #[test]
+    fn refuses_to_start_a_tracker_without_pixels_or_steps() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
+
+        assert_validation_error(set_tracker_running(&fixture.store, profile.id, tracker.id, true));
+
+        fixture.pixel(profile.id, tracker.id);
+        assert_validation_error(set_tracker_running(&fixture.store, profile.id, tracker.id, true));
+        assert!(!is_running(&fixture));
+        assert!(set_tracker_running(&fixture.store, profile.id, tracker.id, false).is_ok());
+    }
+
+    #[test]
+    fn deleting_the_last_pixel_stops_the_tracker() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, first) = complete_tracker(&fixture, profile.id);
+        let second = fixture.pixel(profile.id, tracker.id);
+        set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
+
+        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, first.id).unwrap();
+        assert!(is_running(&fixture));
+
+        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, second.id).unwrap();
+        assert!(!is_running(&fixture));
+    }
+
+    #[test]
+    fn removing_the_last_step_stops_the_tracker() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, _) = complete_tracker(&fixture, profile.id);
+        set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
+
+        update_action(&fixture.store, profile.id, tracker.id, key_sequence(&[("KeyE", None)])).unwrap();
+        assert!(is_running(&fixture));
+
+        update_action(&fixture.store, profile.id, tracker.id, key_sequence(&[])).unwrap();
+        assert!(!is_running(&fixture));
+    }
+
+    #[test]
+    fn keeps_run_state_when_tracker_settings_change() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, _) = complete_tracker(&fixture, profile.id);
+        set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
+
+        update_tracker(&fixture.store, profile.id, tracker.id, tracker_input("Мана", 0, 0, 0))
+            .unwrap();
+
+        assert!(is_running(&fixture));
     }
 
     #[test]

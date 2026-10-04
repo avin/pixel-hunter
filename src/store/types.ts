@@ -67,6 +67,14 @@ export interface Tracker {
   resumeDelayMs: number;
   pixels: Pixel[];
   action: Action;
+  /** Saved choice of the user; only a tracker with pixels and action steps can be running. */
+  isRunning: boolean;
+}
+
+/** Payload of the `engine://status` event, sent when the game window gains or loses focus. */
+export interface EngineStatus {
+  profileId: string;
+  gameActive: boolean;
 }
 
 export interface Profile {

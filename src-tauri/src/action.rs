@@ -31,6 +31,12 @@ impl Action {
             Action::KeySequence(action) => action.validate(),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Action::KeySequence(action) => action.steps.is_empty(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

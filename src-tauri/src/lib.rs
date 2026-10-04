@@ -2,6 +2,7 @@ mod action;
 mod commands;
 mod config;
 mod config_store;
+mod engine;
 mod error;
 mod foreground;
 mod key_codes;
@@ -17,9 +18,10 @@ mod shutter;
 
 use std::path::Path;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 use config_store::ConfigStore;
+use engine::Engine;
 use pixel_capture::PixelCapture;
 use screenshots::Screenshots;
 
@@ -33,6 +35,14 @@ pub fn run() {
             if let Some(backup) = loaded.corrupt_backup {
                 warn_about_corrupt_config(&backup);
             }
+            let emitter = app.handle().clone();
+            app.manage(Engine::start(move |status| {
+                let _ = emitter.emit(engine::STATUS_EVENT, status);
+            }));
+            let handle = app.handle().clone();
+            loaded
+                .store
+                .subscribe(move |config| handle.state::<Engine>().config_changed(config));
             app.manage(loaded.store);
             app.manage(Screenshots::new(app_data_dir.join("screenshots")));
             app.manage(PixelCapture::default());
@@ -46,6 +56,9 @@ pub fn run() {
             commands::tracker_create,
             commands::tracker_update,
             commands::tracker_delete,
+            commands::tracker_set_running,
+            commands::engine_activate,
+            commands::engine_deactivate,
             commands::action_update,
             commands::key_codes_list,
             #[cfg(debug_assertions)]

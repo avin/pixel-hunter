@@ -1,9 +1,13 @@
-import { screen, within } from "@testing-library/react";
+import { emit } from "@tauri-apps/api/event";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
+import { ENGINE_STATUS_EVENT } from "@/hooks/useEngineEvents";
 import type { Profile } from "@/store/types";
 import {
   createFakeBackend,
+  keyStepFixture,
+  pixelFixture,
   profileFixture,
   trackerFixture,
 } from "@/test/fakeBackend";
@@ -92,6 +96,105 @@ describe("ProfilePage", () => {
 
     expect(screen.getByRole("link", { name: "Здоровье" })).toBeInTheDocument();
     expect(backend.state.profiles[0].trackers).toEqual([health]);
+  });
+
+  describe("run toggle", () => {
+    const complete = trackerFixture({
+      id: "health",
+      name: "Здоровье",
+      pixels: [pixelFixture()],
+      action: { type: "keySequence", steps: [keyStepFixture()] },
+    });
+    const runToggle = (name = "Здоровье") =>
+      screen.getByRole("button", { name: `Запуск отслеживания «${name}»` });
+
+    it("starts and stops a tracker", async () => {
+      const { user, backend } = await openProfile(profileFixture({ trackers: [complete] }));
+      expect(runToggle()).toHaveAttribute("aria-pressed", "false");
+      expect(screen.getByText("Остановлено")).toBeInTheDocument();
+
+      await user.click(runToggle());
+
+      await waitFor(() => expect(runToggle()).toHaveAttribute("aria-pressed", "true"));
+      expect(screen.getByText("Запущено")).toBeInTheDocument();
+      expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
+
+      await user.click(runToggle());
+
+      await waitFor(() => expect(runToggle()).toHaveAttribute("aria-pressed", "false"));
+      expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false);
+    });
+
+    it("cannot start a tracker without pixels", async () => {
+      await openProfile(profileFixture({ trackers: [{ ...complete, pixels: [] }] }));
+
+      expect(runToggle()).toBeDisabled();
+      expect(runToggle()).toHaveAccessibleDescription("Добавьте пиксель, чтобы запустить");
+    });
+
+    it("cannot start a tracker without action steps", async () => {
+      await openProfile(
+        profileFixture({
+          trackers: [{ ...complete, action: { type: "keySequence", steps: [] } }],
+        }),
+      );
+
+      expect(runToggle()).toBeDisabled();
+      expect(runToggle()).toHaveAccessibleDescription(
+        "Добавьте шаг действия, чтобы запустить",
+      );
+    });
+
+    it("shows the saved run state when the profile is opened again", async () => {
+      const { user } = await openProfile(
+        profileFixture({
+          trackers: [
+            { ...complete, isRunning: true },
+            { ...complete, id: "mana", name: "Мана" },
+          ],
+        }),
+      );
+
+      await user.click(screen.getByRole("link", { name: "Назад" }));
+      await user.click(await screen.findByRole("link", { name: "Diablo" }));
+
+      expect(runToggle("Здоровье")).toHaveAttribute("aria-pressed", "true");
+      expect(runToggle("Мана")).toHaveAttribute("aria-pressed", "false");
+    });
+  });
+
+  describe("game window indicator", () => {
+    const running = trackerFixture({
+      pixels: [pixelFixture()],
+      action: { type: "keySequence", steps: [keyStepFixture()] },
+      isRunning: true,
+    });
+
+    async function emitStatus(gameActive: boolean) {
+      await act(() =>
+        emit(ENGINE_STATUS_EVENT, { profileId: "profile-1", gameActive }),
+      );
+    }
+
+    it("waits for the game window until it becomes active", async () => {
+      await openProfile(profileFixture({ processName: "game.exe", trackers: [running] }));
+
+      expect(screen.getByRole("status")).toHaveTextContent("Ожидание окна игры game.exe");
+
+      await emitStatus(true);
+      expect(screen.getByRole("status")).toHaveTextContent("Окно игры активно");
+
+      await emitStatus(false);
+      expect(screen.getByRole("status")).toHaveTextContent("Ожидание окна игры game.exe");
+    });
+
+    it("is hidden without running trackers", async () => {
+      await openProfile(profileFixture({ trackers: [{ ...running, isRunning: false }] }));
+
+      await emitStatus(true);
+
+      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    });
   });
 
   it("opens a tracker and returns to the profile", async () => {

@@ -16,6 +16,8 @@ import { useListProfilesQuery } from "@/store/api";
 import type { Tracker } from "@/store/types";
 import { CreateTrackerDialog } from "./CreateTrackerDialog/CreateTrackerDialog";
 import { DeleteTrackerDialog } from "./DeleteTrackerDialog/DeleteTrackerDialog";
+import { GameWindowStatus } from "./GameWindowStatus/GameWindowStatus";
+import { RunToggle } from "./RunToggle/RunToggle";
 
 export function ProfilePage() {
   const { profileId = "" } = useParams();
@@ -63,6 +65,7 @@ export function ProfilePage() {
   }
 
   const openCreateDialog = () => setIsCreateDialogOpen(true);
+  const hasRunningTrackers = profile.trackers.some(({ isRunning }) => isRunning);
 
   return (
     <div className="flex flex-col gap-4 p-6">
@@ -77,6 +80,10 @@ export function ProfilePage() {
           </Button>
         )}
       </div>
+
+      {hasRunningTrackers && (
+        <GameWindowStatus profileId={profile.id} processName={profile.processName} />
+      )}
 
       {profile.trackers.length === 0 ? (
         <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-12 text-center">
@@ -97,6 +104,7 @@ export function ProfilePage() {
           <TableHeader>
             <TableRow>
               <TableHead>Имя</TableHead>
+              <TableHead>Состояние</TableHead>
               <TableHead>Задержка перед действием</TableHead>
               <TableHead>Пауза до возобновления</TableHead>
               <TableHead className="w-0">
@@ -114,6 +122,9 @@ export function ProfilePage() {
                   >
                     {tracker.name}
                   </Link>
+                </TableCell>
+                <TableCell>
+                  <RunToggle profileId={profile.id} tracker={tracker} />
                 </TableCell>
                 <TableCell className="text-muted-foreground">
                   {tracker.preActionDelayMs.min}–{tracker.preActionDelayMs.max} мс

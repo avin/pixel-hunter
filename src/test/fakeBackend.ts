@@ -61,6 +61,18 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
     return tracker;
   };
 
+  const missingPart = (tracker: Tracker) => {
+    if (tracker.pixels.length === 0) return "Добавьте пиксель, чтобы запустить отслеживание";
+    if (tracker.action.steps.length === 0) {
+      return "Добавьте шаг действия, чтобы запустить отслеживание";
+    }
+    return undefined;
+  };
+
+  const stopIfIncomplete = (tracker: Tracker) => {
+    if (missingPart(tracker)) tracker.isRunning = false;
+  };
+
   const findPixel = (args: Args) => {
     const pixel = findTracker(args.profileId, args.trackerId).pixels.find(
       (candidate) => candidate.id === args.pixelId,
@@ -99,6 +111,7 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
           resumeDelayMs: 1000,
           pixels: [],
           action: { type: "keySequence", steps: [] },
+          isRunning: false,
         };
         findProfile(args.profileId).trackers.push(tracker);
         return structuredClone(tracker);
@@ -121,8 +134,21 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
         const action = structuredClone(args.action as Action);
         if (action.steps[0]) action.steps[0].delayBeforeMs = null;
         tracker.action = action;
+        stopIfIncomplete(tracker);
         return structuredClone(action);
       }
+      case "tracker_set_running": {
+        const tracker = findTracker(args.profileId, args.trackerId);
+        const missing = missingPart(tracker);
+        if (args.isRunning && missing) throw new Error(missing);
+        tracker.isRunning = args.isRunning as boolean;
+        return structuredClone(tracker);
+      }
+      case "engine_activate":
+        findProfile(args.profileId);
+        return null;
+      case "engine_deactivate":
+        return null;
       case "key_codes_list":
         return structuredClone(KEY_CODES);
       case "pixel_update": {
@@ -134,6 +160,7 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
         const tracker = findTracker(args.profileId, args.trackerId);
         findPixel(args);
         tracker.pixels = tracker.pixels.filter(({ id }) => id !== args.pixelId);
+        stopIfIncomplete(tracker);
         return null;
       }
       case "pixel_capture_start":
@@ -212,6 +239,7 @@ export function trackerFixture(overrides: Partial<Tracker> = {}): Tracker {
     resumeDelayMs: 1000,
     pixels: [],
     action: { type: "keySequence", steps: [] },
+    isRunning: false,
     ...overrides,
   };
 }

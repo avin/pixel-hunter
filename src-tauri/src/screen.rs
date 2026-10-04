@@ -63,7 +63,6 @@ fn bgra_to_rgb(pixel: &[u8]) -> Rgb {
 }
 
 /// Source box of every point paired with the column of the N×1 staging texture it lands in.
-#[allow(dead_code, reason = "API for the tracking engine")]
 fn point_copies(points: &[(u32, u32)]) -> impl Iterator<Item = (u32, D3D11_BOX)> + '_ {
     points.iter().enumerate().map(|(column, &(x, y))| {
         let source = D3D11_BOX {
@@ -85,7 +84,6 @@ pub struct PrimaryScreen {
     duplication: Option<IDXGIOutputDuplication>,
     /// Copy of the last acquired desktop image; `AcquireNextFrame` only returns changes.
     last_frame: Option<ID3D11Texture2D>,
-    #[allow(dead_code, reason = "API for the tracking engine")]
     points_staging: Option<(u32, ID3D11Texture2D)>,
 }
 
@@ -134,7 +132,6 @@ impl PrimaryScreen {
         })
     }
 
-    #[allow(dead_code, reason = "API for the tracking engine")]
     pub fn read_pixels(&mut self, points: &[(u32, u32)]) -> AppResult<Vec<Rgb>> {
         if points.is_empty() {
             return Ok(Vec::new());
@@ -216,10 +213,13 @@ impl PrimaryScreen {
         })
     }
 
+    /// Waits for a frame only until the first image; after that an unchanged desktop means the
+    /// stored image is current, and waiting would stall the 50 ms polling.
     fn acquire(&mut self, duplication: &IDXGIOutputDuplication) -> windows::core::Result<()> {
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
-        unsafe { duplication.AcquireNextFrame(FRAME_TIMEOUT_MS, &mut info, &mut resource)? };
+        let timeout = if self.last_frame.is_some() { 0 } else { FRAME_TIMEOUT_MS };
+        unsafe { duplication.AcquireNextFrame(timeout, &mut info, &mut resource)? };
         // A frame without a present is a pointer-only update; its surface may hold no desktop image.
         let stored = if info.LastPresentTime == 0 {
             Ok(())
@@ -261,7 +261,6 @@ impl PrimaryScreen {
         Ok(())
     }
 
-    #[allow(dead_code, reason = "API for the tracking engine")]
     fn points_staging(&mut self, columns: u32) -> AppResult<ID3D11Texture2D> {
         if let Some((cached_columns, texture)) = &self.points_staging {
             if *cached_columns == columns {

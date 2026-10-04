@@ -51,10 +51,10 @@ impl Sleeper for ThreadSleeper {
 }
 
 /// 1 ms system timer resolution while alive; the default 15.6 ms would swallow the hold spread.
-struct TimerResolution;
+pub struct TimerResolution;
 
 impl TimerResolution {
-    fn begin() -> Self {
+    pub fn begin() -> Self {
         unsafe { timeBeginPeriod(1) };
         Self
     }

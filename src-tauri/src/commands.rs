@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::action::Action;
 use crate::config::{Pixel, Profile, Tracker};
 use crate::config_store::ConfigStore;
+use crate::engine::Engine;
 use crate::error::AppResult;
 use crate::key_codes::{self, KeyCodeInfo};
 use crate::pixel_capture::{self, CaptureCommand, CaptureRequest, PixelCapture};
@@ -67,6 +68,30 @@ pub fn tracker_delete(
     tracker_id: Uuid,
 ) -> AppResult<()> {
     profiles::delete_tracker(&store, &screenshots, profile_id, tracker_id)
+}
+
+#[tauri::command]
+pub fn tracker_set_running(
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    is_running: bool,
+) -> AppResult<Tracker> {
+    profiles::set_tracker_running(&store, profile_id, tracker_id, is_running)
+}
+
+#[tauri::command]
+pub fn engine_activate(
+    store: State<'_, ConfigStore>,
+    engine: State<'_, Engine>,
+    profile_id: Uuid,
+) -> AppResult<()> {
+    engine.activate(&store, profile_id)
+}
+
+#[tauri::command]
+pub fn engine_deactivate(engine: State<'_, Engine>) {
+    engine.deactivate();
 }
 
 #[tauri::command]
@@ -138,6 +163,7 @@ pub fn pixel_capture_start(
         tracker_id,
     };
     capture.start(move |commands| {
+        let _engine_paused = app.state::<Engine>().pause();
         let env = TauriCaptureEnv::new(app.clone());
         let store = app.state::<ConfigStore>();
         let screenshots = app.state::<Screenshots>();

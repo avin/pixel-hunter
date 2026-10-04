@@ -1,5 +1,6 @@
 import { configureStore } from "@reduxjs/toolkit";
 import { tauriApi } from "./api";
+import { engineSlice } from "./engineSlice";
 import { errorToastMiddleware } from "./errorToastMiddleware";
 import { pixelCaptureSlice } from "./pixelCaptureSlice";
 
@@ -8,6 +9,7 @@ export function createAppStore() {
     reducer: {
       [tauriApi.reducerPath]: tauriApi.reducer,
       [pixelCaptureSlice.name]: pixelCaptureSlice.reducer,
+      [engineSlice.name]: engineSlice.reducer,
     },
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware().concat(tauriApi.middleware, errorToastMiddleware),

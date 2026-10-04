@@ -1,7 +1,7 @@
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::config::Config;
@@ -9,9 +9,12 @@ use crate::error::AppResult;
 
 const CONFIG_FILE: &str = "config.json";
 
+type Listener = Box<dyn Fn(&Config) + Send + Sync>;
+
 pub struct ConfigStore {
     path: PathBuf,
     config: Mutex<Config>,
+    listener: OnceLock<Listener>,
 }
 
 pub struct LoadedConfigStore {
@@ -38,6 +41,7 @@ impl ConfigStore {
             store: ConfigStore {
                 path,
                 config: Mutex::new(config),
+                listener: OnceLock::new(),
             },
             corrupt_backup,
         })
@@ -54,7 +58,18 @@ impl ConfigStore {
         let result = mutate(&mut next)?;
         write_atomically(&self.path, &next)?;
         *current = next;
+        if let Some(listener) = self.listener.get() {
+            listener(&current);
+        }
         Ok(result)
+    }
+
+    /// `listener` gets every committed config, under the store lock and so in commit order;
+    /// it must not call back into the store.
+    pub fn subscribe(&self, listener: impl Fn(&Config) + Send + Sync + 'static) {
+        if self.listener.set(Box::new(listener)).is_err() {
+            panic!("ConfigStore supports a single listener");
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Config> {
@@ -174,5 +189,36 @@ mod tests {
         assert!(result.is_err());
         assert!(profile_names(&store).is_empty());
         assert!(!dir.path().join(CONFIG_FILE).exists());
+    }
+
+    fn subscribed_store(dir: &Path) -> (ConfigStore, std::sync::Arc<Mutex<Vec<usize>>>) {
+        let store = ConfigStore::load(dir).unwrap().store;
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        store.subscribe(move |config| recorder.lock().unwrap().push(config.profiles.len()));
+        (store, seen)
+    }
+
+    #[test]
+    fn notifies_the_listener_with_each_committed_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, seen) = subscribed_store(dir.path());
+
+        add_profile(&store, "Diablo").unwrap();
+        add_profile(&store, "Path of Exile").unwrap();
+
+        assert_eq!(*seen.lock().unwrap(), [1, 2]);
+    }
+
+    #[test]
+    fn does_not_notify_about_failed_mutations() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, seen) = subscribed_store(dir.path());
+        fs::create_dir(dir.path().join("config.json.tmp")).unwrap();
+
+        let _ = add_profile(&store, "Diablo");
+        let _: AppResult<()> = store.update(|_| Err(AppError::Validation("invalid".into())));
+
+        assert!(seen.lock().unwrap().is_empty());
     }
 }

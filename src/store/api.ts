@@ -91,6 +91,27 @@ export const tauriApi = createApi({
         { type: "Profile", id: profileId },
       ],
     }),
+    trackerSetRunning: builder.mutation<
+      Tracker,
+      { profileId: string; trackerId: string; isRunning: boolean }
+    >({
+      query: ({ profileId, trackerId, isRunning }) => ({
+        command: "tracker_set_running",
+        args: { profileId, trackerId, isRunning },
+      }),
+      invalidatesTags: (_result, _error, { profileId }) => [
+        { type: "Profile", id: profileId },
+      ],
+    }),
+    engineActivate: builder.mutation<void, { profileId: string }>({
+      query: ({ profileId }) => ({
+        command: "engine_activate",
+        args: { profileId },
+      }),
+    }),
+    engineDeactivate: builder.mutation<void, void>({
+      query: () => ({ command: "engine_deactivate" }),
+    }),
     actionUpdate: builder.mutation<
       Action,
       { profileId: string; trackerId: string; action: Action }
@@ -165,6 +186,9 @@ export const {
   useCreateTrackerMutation,
   useUpdateTrackerMutation,
   useDeleteTrackerMutation,
+  useTrackerSetRunningMutation,
+  useEngineActivateMutation,
+  useEngineDeactivateMutation,
   useActionUpdateMutation,
   useKeyCodesListQuery,
   usePixelUpdateMutation,

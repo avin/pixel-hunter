@@ -31,6 +31,19 @@ pub struct ForegroundWindow {
     pub exe_name: String,
 }
 
+/// Foreground window and the id of its process, without the costly exe name lookup.
+pub fn foreground_ids() -> Option<(WindowHandle, u32)> {
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.is_invalid() {
+            return None;
+        }
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        Some((hwnd.into(), pid))
+    }
+}
+
 pub fn foreground_window() -> Option<ForegroundWindow> {
     unsafe {
         let hwnd = GetForegroundWindow();
