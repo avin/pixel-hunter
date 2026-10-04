@@ -5,6 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pixel Hunter</title>
+    <script>
+      const view = new URLSearchParams(location.search).get("view");
+      if (view === "viewer" || view === "picker") {
+        document.documentElement.dataset.screenOverlay = "";
+      }
+    </script>
+    <style>
+      html[data-screen-overlay], html[data-screen-overlay] body {
+        background: #000;
+        margin: 0;
+      }
+    </style>
   </head>
 
   <body>

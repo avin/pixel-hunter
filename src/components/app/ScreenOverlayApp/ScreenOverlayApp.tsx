@@ -24,11 +24,7 @@ export function ScreenOverlayApp({ store, search }: Props) {
       {params.get("view") === "picker" ? (
         <ScreenshotPicker profileId={profileId} pixelId={pixelId} />
       ) : (
-        <ScreenshotViewer
-          profileId={profileId}
-          pixelId={pixelId}
-          pixel={{ x: Number(params.get("x")), y: Number(params.get("y")) }}
-        />
+        <ScreenshotViewer />
       )}
     </Provider>
   );

@@ -42,6 +42,7 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
 
   const addButton = (
     <Button
+      size="sm"
       disabled={isCapturing}
       onClick={() => void startCapture({ profileId, trackerId: tracker.id })}
     >
@@ -51,12 +52,12 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
   );
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-4 border-t p-6">
-      <div className="flex items-center justify-between gap-4">
-        <h2 id={headingId} className="font-heading text-base font-medium">
+    <section aria-labelledby={headingId} className="flex min-h-0 min-w-0 flex-1 flex-col border">
+      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+        <h2 id={headingId} className="font-heading text-sm font-medium">
           Пиксели
         </h2>
-        {tracker.pixels.length > 0 && addButton}
+        {addButton}
       </div>
 
       {status && (
@@ -69,40 +70,41 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
       )}
 
       {tracker.pixels.length === 0 ? (
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed px-6 py-12 text-center">
-          <h3 className="font-heading text-base font-medium">Пикселей пока нет</h3>
-          <p className="max-w-sm text-sm text-muted-foreground">
+        <div className="overflow-auto px-3 py-3">
+          <h3 className="text-sm font-medium">Пикселей пока нет</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
             После нажатия переключитесь в игру: через 3 секунды приложение сделает
             снимок экрана, и на нём можно будет выбрать точку.
           </p>
-          {addButton}
         </div>
       ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Снимок</TableHead>
-              <TableHead>Координаты</TableHead>
-              <TableHead>Цвет</TableHead>
-              <TableHead>Условие</TableHead>
-              <TableHead>Допуск, %</TableHead>
-              <TableHead className="w-0">
-                <span className="sr-only">Действия</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {tracker.pixels.map((pixel) => (
-              <PixelRow
-                key={pixel.id}
-                profileId={profileId}
-                trackerId={tracker.id}
-                pixel={pixel}
-                screenshotsDir={screenshotsDir}
-              />
-            ))}
-          </TableBody>
-        </Table>
+        <div className="min-h-0 flex-1 overflow-hidden [&>div]:h-full [&>div]:overflow-auto">
+          <Table aria-label="Пиксели" className="min-w-[560px] text-xs [&_td]:py-1 [&_th]:h-8">
+            <TableHeader className="sticky top-0 z-10 bg-background">
+              <TableRow>
+                <TableHead className="w-20">Снимок</TableHead>
+                <TableHead className="w-28">Координаты</TableHead>
+                <TableHead className="w-28">Цвет</TableHead>
+                <TableHead className="w-32">Условие</TableHead>
+                <TableHead className="w-24">Допуск, %</TableHead>
+                <TableHead className="w-10">
+                  <span className="sr-only">Действия</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {tracker.pixels.map((pixel) => (
+                <PixelRow
+                  key={pixel.id}
+                  profileId={profileId}
+                  trackerId={tracker.id}
+                  pixel={pixel}
+                  screenshotsDir={screenshotsDir}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
     </section>
   );

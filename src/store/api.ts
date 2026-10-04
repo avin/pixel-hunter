@@ -7,6 +7,7 @@ import type {
   PixelInput,
   Profile,
   ProfileInput,
+  ScreenshotViewRequest,
   Tracker,
   TrackerInput,
   WindowedProcess,
@@ -167,6 +168,19 @@ export const tauriApi = createApi({
         args: { profileId, trackerId, pixelId },
       }),
     }),
+    screenshotViewRequest: builder.query<ScreenshotViewRequest | null, void>({
+      query: () => ({ command: "screenshot_view_request" }),
+      keepUnusedDataFor: 0,
+    }),
+    screenshotViewReady: builder.mutation<void, { sequence: number }>({
+      query: (args) => ({ command: "screenshot_view_ready", args }),
+    }),
+    screenshotViewClose: builder.mutation<void, { sequence: number }>({
+      query: (args) => ({ command: "screenshot_view_close", args }),
+    }),
+    screenshotViewFailed: builder.mutation<void, { sequence: number }>({
+      query: (args) => ({ command: "screenshot_view_failed", args }),
+    }),
     screenshotsDir: builder.query<string, void>({
       query: () => ({ command: "screenshots_dir" }),
       keepUnusedDataFor: Infinity,
@@ -197,6 +211,10 @@ export const {
   usePixelCaptureCancelMutation,
   usePixelCapturePickMutation,
   usePixelViewOpenMutation,
+  useLazyScreenshotViewRequestQuery,
+  useScreenshotViewReadyMutation,
+  useScreenshotViewCloseMutation,
+  useScreenshotViewFailedMutation,
   useScreenshotsDirQuery,
   useListWindowedProcessesQuery,
 } = tauriApi;

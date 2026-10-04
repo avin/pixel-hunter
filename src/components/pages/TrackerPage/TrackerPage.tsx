@@ -3,6 +3,7 @@ import { profilePath } from "@/components/app/AppRouter/paths";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useListProfilesQuery } from "@/store/api";
+import { RunToggle } from "@/components/pages/ProfilePage/RunToggle/RunToggle";
 import { ActionSection } from "./ActionSection/ActionSection";
 import { PixelsSection } from "./PixelsSection/PixelsSection";
 import { TrackerForm } from "./TrackerForm/TrackerForm";
@@ -26,7 +27,7 @@ export function TrackerPage() {
 
   if (isLoading) {
     return (
-      <div role="status" aria-label="Загрузка отслеживания" className="flex max-w-md flex-col gap-4 p-6">
+      <div role="status" aria-label="Загрузка отслеживания" className="flex max-w-md flex-col gap-2 p-3">
         <Skeleton className="h-8" />
         <Skeleton className="h-16" />
         <Skeleton className="h-8" />
@@ -35,7 +36,7 @@ export function TrackerPage() {
   }
   if (isError) {
     return (
-      <div role="alert" className="flex flex-col items-start gap-3 p-6">
+      <div role="alert" className="flex flex-col items-start gap-3 p-3">
         <p className="text-sm">Не удалось загрузить отслеживание.</p>
         <Button variant="outline" onClick={() => refetch()}>
           Повторить
@@ -45,7 +46,7 @@ export function TrackerPage() {
   }
   if (!profile || !tracker) {
     return (
-      <div className="flex flex-col items-start gap-3 p-6">
+      <div className="flex flex-col items-start gap-3 p-3">
         <p className="text-sm">Отслеживание не найдено.</p>
         <Link
           to={profilePath(profileId)}
@@ -58,14 +59,20 @@ export function TrackerPage() {
   }
 
   return (
-    <div className="flex flex-col">
-      <TrackerForm key={tracker.id} profileId={profileId} tracker={tracker} />
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b px-3 py-2">
+        <span className="truncate font-medium">Настройки отслеживания</span>
+        <RunToggle profileId={profileId} tracker={tracker} />
+      </div>
+      <TrackerForm key={`${profileId}/${tracker.id}`} profileId={profileId} tracker={tracker} />
+      <div className="grid min-h-0 flex-1 grid-rows-2 gap-2 p-2">
       <PixelsSection
         profileId={profileId}
         processName={profile.processName}
         tracker={tracker}
       />
       <ActionSection profileId={profileId} tracker={tracker} />
+      </div>
     </div>
   );
 }

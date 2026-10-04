@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "screenshot-viewer",
+  "description": "Capability for the reusable screenshot viewer window",
+  "windows": ["screenshot-viewer"],
+  "permissions": ["core:default"]
+}

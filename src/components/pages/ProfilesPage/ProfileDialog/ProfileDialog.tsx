@@ -111,7 +111,7 @@ export function ProfileDialog({ profile, onClose }: Props) {
 
   return (
     <Dialog open onOpenChange={(isOpen) => !isOpen && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-md">
         <form noValidate onSubmit={handleSubmit} className="contents">
           <DialogHeader>
             <DialogTitle>
@@ -163,11 +163,11 @@ export function ProfileDialog({ profile, onClose }: Props) {
                       }
                     />
                   </SelectTrigger>
-                  <SelectContent alignItemWithTrigger={false}>
+                  <SelectContent alignItemWithTrigger={false} className="max-w-[calc(100vw-2rem)]">
                     {processOptions.map((process) => (
-                      <SelectItem key={process.exeName} value={process.exeName}>
-                        <span>{process.exeName}</span>
-                        <span className="truncate text-muted-foreground">
+                      <SelectItem key={process.exeName} value={process.exeName} className="*:last:min-w-0 *:last:flex-col *:last:items-start *:last:gap-0.5">
+                        <span className="break-all font-mono">{process.exeName}</span>
+                        <span className="whitespace-normal break-words text-muted-foreground">
                           {process.windowTitles.length > 0
                             ? process.windowTitles.join(", ")
                             : "не запущен"}

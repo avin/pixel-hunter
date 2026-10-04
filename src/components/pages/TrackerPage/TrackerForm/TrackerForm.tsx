@@ -1,7 +1,7 @@
 import { useForm, useFormValidation, useFormWatch } from "@avinlab/react-form";
-import { useId } from "react";
-import { toast } from "sonner";
-import { Button } from "@/components/ui/button";
+import { useEffect, useId, useRef, useState } from "react";
+import { useBlocker } from "react-router-dom";
+import { useWorkspaceNavigation } from "@/components/app/AppLayout/workspaceNavigation";
 import {
   Field,
   FieldDescription,
@@ -50,6 +50,12 @@ export function TrackerForm({ profileId, tracker }: Props) {
     resumeDelay: String(tracker.resumeDelayMs),
   });
   const values = useFormWatch(form);
+  const baseline = useRef(form.values);
+  const isSaving = useRef(false);
+  const [saveError, setSaveError] = useState<string>();
+  const { setIsLeaving } = useWorkspaceNavigation();
+  const isDirty = (Object.keys(values) as (keyof Values)[]).some((key) => values[key] !== baseline.current[key]);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => currentLocation.pathname !== nextLocation.pathname && (isDirty || isSaving.current));
   const { errors } = useFormValidation(form, validateTracker);
   const reveal = useErrorReveal<ErrorField>();
   const [updateTracker, { isLoading }] = useUpdateTrackerMutation();
@@ -69,6 +75,7 @@ export function TrackerForm({ profileId, tracker }: Props) {
 
   function setField(field: keyof Values, errorField: ErrorField) {
     return (event: React.ChangeEvent<HTMLInputElement>) => {
+      setSaveError(undefined);
       form.setValue(field, event.currentTarget.value);
       reveal.change(errorField);
     };
@@ -78,8 +85,9 @@ export function TrackerForm({ profileId, tracker }: Props) {
     reveal.blur(errorField, validateTracker(form.values));
   }
 
-  async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+    if (blocker.state !== "blocked" || isSaving.current) return;
+    const transition = blocker;
     const firstInvalid = reveal.submit(validateTracker(form.values), FIELD_ORDER);
     if (firstInvalid) {
       const fieldId = {
@@ -88,29 +96,39 @@ export function TrackerForm({ profileId, tracker }: Props) {
         resumeDelay: ids.resumeDelay,
       }[firstInvalid];
       document.getElementById(fieldId)?.focus();
+      transition.reset();
       return;
     }
-
-    const result = await updateTracker({
+    isSaving.current = true;
+    setIsLeaving(true);
+    setSaveError(undefined);
+    const draft = form.values;
+    void updateTracker({
       profileId,
       trackerId: tracker.id,
       input: {
-        name: form.values.name.trim(),
-        preActionDelayMs: {
-          min: Number(form.values.delayMin),
-          max: Number(form.values.delayMax),
-        },
-        resumeDelayMs: Number(form.values.resumeDelay),
+        name: draft.name.trim(),
+        preActionDelayMs: { min: Number(draft.delayMin), max: Number(draft.delayMax) },
+        resumeDelayMs: Number(draft.resumeDelay),
       },
+    }).then((result) => {
+      isSaving.current = false;
+      setIsLeaving(false);
+      if ("error" in result) {
+        const error = result.error;
+        setSaveError(error && "message" in error ? String(error.message) : "Не удалось сохранить настройки");
+        transition.reset();
+      } else {
+        baseline.current = draft;
+        transition.proceed();
+      }
     });
-    if (!("error" in result)) {
-      toast.success("Отслеживание сохранено");
-    }
-  }
+  }, [blocker]);
 
   return (
-    <form noValidate onSubmit={handleSubmit} className="flex max-w-md flex-col gap-6 p-6">
-      <FieldGroup>
+    <form noValidate onSubmit={(event) => event.preventDefault()} aria-label="Настройки отслеживания" className="shrink-0 border-b p-3">
+      <fieldset disabled={isLoading} className="min-w-0">
+      <FieldGroup className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] items-start gap-3">
         <Field data-invalid={nameError ? true : undefined}>
           <FieldLabel htmlFor={ids.name}>Имя</FieldLabel>
           <Input
@@ -136,7 +154,7 @@ export function TrackerForm({ profileId, tracker }: Props) {
           <FieldDescription>
             Перед действием выдерживается случайная пауза из этого диапазона.
           </FieldDescription>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-2 gap-2">
             <Field data-invalid={delayError ? true : undefined}>
               <FieldLabel htmlFor={ids.delayMin}>Минимум</FieldLabel>
               <Input
@@ -194,11 +212,9 @@ export function TrackerForm({ profileId, tracker }: Props) {
         </Field>
       </FieldGroup>
 
-      <div>
-        <Button type="submit" disabled={isLoading}>
-          Сохранить
-        </Button>
-      </div>
+      </fieldset>
+      {isLoading && <p role="status" className="mt-2 text-muted-foreground">Сохранение…</p>}
+      {saveError && <p role="alert" className="mt-2 text-destructive">{saveError}</p>}
     </form>
   );
 }

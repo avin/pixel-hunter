@@ -18,18 +18,54 @@ const mana = trackerFixture({ id: "mana", name: "Мана" });
 
 async function openProfile(profile: Profile) {
   const rendered = renderApp(createFakeBackend({ profiles: [profile] }));
-  await rendered.user.click(await screen.findByRole("link", { name: profile.name }));
+  await rendered.user.click(
+    await screen.findByRole("link", { name: profile.name }),
+  );
   return rendered;
 }
 
 async function openCreateDialog(user: UserEvent) {
-  await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
+  await user.click(
+    screen.getByRole("button", { name: "Создать отслеживание" }),
+  );
   return screen.getByRole("dialog", { name: "Новое отслеживание" });
 }
 
 describe("ProfilePage", () => {
+  it("offers profile editing and confirmed deletion in the profile view", async () => {
+    const { user, backend } = await openProfile(profileFixture());
+    await user.click(screen.getByRole("button", { name: "Изменить профиль «Diablo»" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Отмена" }));
+    await user.click(screen.getByRole("button", { name: "Удалить профиль «Diablo»" }));
+    await screen.findByRole("alertdialog", { name: "Удалить профиль «Diablo»?" });
+    await user.click(screen.getByRole("button", { name: "Отмена" }));
+    expect(backend.state.profiles).toHaveLength(1);
+    expect(screen.getByRole("heading", { name: "Diablo" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Удалить профиль «Diablo»" }));
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
+    await screen.findByRole("heading", { name: "Профили" });
+    expect(backend.state.profiles).toHaveLength(0);
+    await waitFor(() => expect(backend.callsOf("engine_deactivate")).toHaveLength(1));
+  });
+
+  it("keeps the profile open when deletion fails", async () => {
+    const { user, backend } = await openProfile(profileFixture());
+    backend.failOn("profile_delete", "Не удалось удалить профиль");
+    await user.click(screen.getByRole("button", { name: "Удалить профиль «Diablo»" }));
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
+    await screen.findByText("Не удалось удалить профиль");
+    expect(screen.getByRole("alertdialog", { name: "Удалить профиль «Diablo»?" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Отмена" }));
+    expect(screen.getByRole("heading", { name: "Diablo" })).toBeInTheDocument();
+    expect(backend.state.profiles).toHaveLength(1);
+    expect(backend.callsOf("engine_deactivate")).toHaveLength(0);
+  });
+
   it("shows the profile process and its trackers", async () => {
-    await openProfile(profileFixture({ processName: "game.exe", trackers: [health, mana] }));
+    await openProfile(
+      profileFixture({ processName: "game.exe", trackers: [health, mana] }),
+    );
 
     expect(screen.getByText("game.exe")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Здоровье" })).toBeInTheDocument();
@@ -42,19 +78,28 @@ describe("ProfilePage", () => {
     expect(
       screen.getByRole("heading", { name: "Отслеживаний пока нет" }),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Создать отслеживание" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Создать отслеживание" }),
+    ).toBeInTheDocument();
   });
 
   it("creates a tracker with a name", async () => {
     const { user, backend } = await openProfile(profileFixture());
     const dialog = await openCreateDialog(user);
 
-    await user.type(within(dialog).getByRole("textbox", { name: "Имя" }), "Здоровье");
+    await user.type(
+      within(dialog).getByRole("textbox", { name: "Имя" }),
+      "Здоровье",
+    );
     await user.click(within(dialog).getByRole("button", { name: "Создать" }));
 
-    expect(await screen.findByRole("link", { name: "Здоровье" })).toBeInTheDocument();
+    expect(
+      await screen.findByRole("link", { name: "Здоровье" }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(backend.state.profiles[0].trackers).toMatchObject([{ name: "Здоровье" }]);
+    expect(backend.state.profiles[0].trackers).toMatchObject([
+      { name: "Здоровье" },
+    ]);
   });
 
   it("does not create a tracker with an empty name", async () => {
@@ -65,13 +110,17 @@ describe("ProfilePage", () => {
     await user.type(nameInput, "   ");
     await user.click(within(dialog).getByRole("button", { name: "Создать" }));
 
-    expect(within(dialog).getByText("Введите имя отслеживания")).toBeInTheDocument();
+    expect(
+      within(dialog).getByText("Введите имя отслеживания"),
+    ).toBeInTheDocument();
     expect(nameInput).toHaveFocus();
     expect(backend.state.profiles[0].trackers).toEqual([]);
   });
 
   it("deletes a tracker after confirmation", async () => {
-    const { user, backend } = await openProfile(profileFixture({ trackers: [health, mana] }));
+    const { user, backend } = await openProfile(
+      profileFixture({ trackers: [health, mana] }),
+    );
 
     await user.click(
       screen.getByRole("button", { name: "Удалить отслеживание «Здоровье»" }),
@@ -82,12 +131,16 @@ describe("ProfilePage", () => {
     await user.click(within(dialog).getByRole("button", { name: "Удалить" }));
 
     await screen.findByRole("link", { name: "Мана" });
-    expect(screen.queryByRole("link", { name: "Здоровье" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: "Здоровье" }),
+    ).not.toBeInTheDocument();
     expect(backend.state.profiles[0].trackers).toEqual([mana]);
   });
 
   it("keeps the tracker when deletion is cancelled", async () => {
-    const { user, backend } = await openProfile(profileFixture({ trackers: [health] }));
+    const { user, backend } = await openProfile(
+      profileFixture({ trackers: [health] }),
+    );
 
     await user.click(
       screen.getByRole("button", { name: "Удалить отслеживание «Здоровье»" }),
@@ -109,33 +162,45 @@ describe("ProfilePage", () => {
       screen.getByRole("button", { name: `Запуск отслеживания «${name}»` });
 
     it("starts and stops a tracker", async () => {
-      const { user, backend } = await openProfile(profileFixture({ trackers: [complete] }));
+      const { user, backend } = await openProfile(
+        profileFixture({ trackers: [complete] }),
+      );
       expect(runToggle()).toHaveAttribute("aria-pressed", "false");
       expect(screen.getByText("Остановлено")).toBeInTheDocument();
 
       await user.click(runToggle());
 
-      await waitFor(() => expect(runToggle()).toHaveAttribute("aria-pressed", "true"));
+      await waitFor(() =>
+        expect(runToggle()).toHaveAttribute("aria-pressed", "true"),
+      );
       expect(screen.getByText("Запущено")).toBeInTheDocument();
       expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
 
       await user.click(runToggle());
 
-      await waitFor(() => expect(runToggle()).toHaveAttribute("aria-pressed", "false"));
+      await waitFor(() =>
+        expect(runToggle()).toHaveAttribute("aria-pressed", "false"),
+      );
       expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false);
     });
 
     it("cannot start a tracker without pixels", async () => {
-      await openProfile(profileFixture({ trackers: [{ ...complete, pixels: [] }] }));
+      await openProfile(
+        profileFixture({ trackers: [{ ...complete, pixels: [] }] }),
+      );
 
       expect(runToggle()).toBeDisabled();
-      expect(runToggle()).toHaveAccessibleDescription("Добавьте пиксель, чтобы запустить");
+      expect(runToggle()).toHaveAccessibleDescription(
+        "Добавьте пиксель, чтобы запустить",
+      );
     });
 
     it("cannot start a tracker without action steps", async () => {
       await openProfile(
         profileFixture({
-          trackers: [{ ...complete, action: { type: "keySequence", steps: [] } }],
+          trackers: [
+            { ...complete, action: { type: "keySequence", steps: [] } },
+          ],
         }),
       );
 
@@ -177,36 +242,53 @@ describe("ProfilePage", () => {
     }
 
     it("waits for the game window until it becomes active", async () => {
-      await openProfile(profileFixture({ processName: "game.exe", trackers: [running] }));
+      await openProfile(
+        profileFixture({ processName: "game.exe", trackers: [running] }),
+      );
 
-      expect(screen.getByRole("status")).toHaveTextContent("Ожидание окна игры game.exe");
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Ожидание окна игры game.exe",
+      );
 
       await emitStatus(true);
       expect(screen.getByRole("status")).toHaveTextContent("Окно игры активно");
 
       await emitStatus(false);
-      expect(screen.getByRole("status")).toHaveTextContent("Ожидание окна игры game.exe");
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Ожидание окна игры game.exe",
+      );
     });
 
-    it("is hidden without running trackers", async () => {
-      await openProfile(profileFixture({ trackers: [{ ...running, isRunning: false }] }));
+    it("shows window activity separately from the saved run count", async () => {
+      await openProfile(
+        profileFixture({ trackers: [{ ...running, isRunning: false }] }),
+      );
 
       await emitStatus(true);
 
-      expect(screen.queryByRole("status")).not.toBeInTheDocument();
+      expect(screen.getByRole("status")).toHaveTextContent("Окно игры активно");
+      expect(screen.getByText("Запущено: 0/1")).toBeInTheDocument();
     });
   });
 
   it("opens a tracker and returns to the profile", async () => {
-    const { user } = await openProfile(profileFixture({ name: "Diablo", trackers: [health] }));
+    const { user } = await openProfile(
+      profileFixture({ name: "Diablo", trackers: [health] }),
+    );
 
     await user.click(screen.getByRole("link", { name: "Здоровье" }));
 
-    expect(screen.getByRole("heading", { level: 1, name: "Здоровье" })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: "Имя" })).toHaveValue("Здоровье");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Здоровье" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: "Имя" })).toHaveValue(
+      "Здоровье",
+    );
 
     await user.click(screen.getByRole("link", { name: "Назад" }));
 
-    expect(screen.getByRole("heading", { level: 1, name: "Diablo" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Diablo" }),
+    ).toBeInTheDocument();
   });
 });

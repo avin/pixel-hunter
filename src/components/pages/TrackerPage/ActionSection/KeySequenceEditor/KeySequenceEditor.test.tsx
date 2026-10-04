@@ -28,9 +28,9 @@ async function openTracker(steps: KeyStep[] = []) {
 const savedSteps = (backend: ReturnType<typeof createFakeBackend>) =>
   backend.state.profiles[0].trackers[0].action.steps;
 const stepItems = () =>
-  within(screen.getByRole("list", { name: "Шаги последовательности" })).getAllByRole(
-    "listitem",
-  );
+  within(screen.getByRole("table", { name: "Шаги последовательности" })).getAllByRole(
+    "row",
+  ).slice(1);
 const delayInput = (step: number, bound: "минимум" | "максимум") =>
   screen.getByRole("spinbutton", { name: `Задержка перед шагом ${step}: ${bound}, мс` });
 const addButton = () => screen.getByRole("button", { name: "Добавить нажатие" });
@@ -57,7 +57,11 @@ describe("KeySequenceEditor", () => {
     await openTracker([q, ctrl1, f5]);
 
     const [first, second, third] = stepItems();
+    const table = screen.getByRole("table", { name: "Шаги последовательности" });
+    expect(within(table).getByRole("columnheader", { name: "Сочетание" })).toBeInTheDocument();
+    expect(within(table).getByRole("columnheader", { name: "Задержка, мс" })).toBeInTheDocument();
     expect(first).toHaveTextContent("Q");
+    expect(within(first).getByLabelText("Без задержки")).toHaveTextContent("—");
     expect(within(first).queryByRole("spinbutton")).not.toBeInTheDocument();
     expect(second).toHaveTextContent("Ctrl + 1");
     expect(delayInput(2, "минимум")).toHaveValue(300);
@@ -71,7 +75,7 @@ describe("KeySequenceEditor", () => {
     await openTracker();
 
     expect(screen.getByText("Нажатия не настроены")).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Шаги последовательности" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Шаги последовательности" })).not.toBeInTheDocument();
   });
 
   it("adds the first step without a delay", async () => {

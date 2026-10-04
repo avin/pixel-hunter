@@ -1,5 +1,6 @@
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TableCell, TableRow } from "@/components/ui/table";
 import type { KeyStep } from "@/store/types";
 import { KeyRecorder } from "../KeyRecorder/KeyRecorder";
 import { StepDelay } from "./StepDelay/StepDelay";
@@ -24,18 +25,24 @@ export function StepRow({
   onUnsupported,
 }: Props) {
   return (
-    <li className="flex flex-col gap-2 rounded-lg border px-3 py-2">
-      {step.delayBeforeMs && (
-        <StepDelay
-          stepNumber={stepNumber}
-          delay={step.delayBeforeMs}
-          onSave={(delayBeforeMs) => onChange({ ...step, delayBeforeMs })}
-        />
-      )}
-      <div className="flex items-center gap-3">
-        <span className="w-5 text-sm text-muted-foreground tabular-nums">{stepNumber}.</span>
-        <kbd className="rounded-md border bg-muted px-2 py-0.5 font-mono text-sm">{label}</kbd>
-        <div className="ml-auto flex items-center gap-1">
+    <TableRow>
+      <TableCell className="font-mono text-muted-foreground tabular-nums">{stepNumber}.</TableCell>
+      <TableCell>
+        <kbd className="font-mono text-xs">{label}</kbd>
+      </TableCell>
+      <TableCell>
+        {step.delayBeforeMs ? (
+          <StepDelay
+            stepNumber={stepNumber}
+            delay={step.delayBeforeMs}
+            onSave={(delayBeforeMs) => onChange({ ...step, delayBeforeMs })}
+          />
+        ) : (
+          <span aria-label="Без задержки" className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+      <TableCell>
+        <div className="flex items-center justify-end gap-1">
           <KeyRecorder
             variant="ghost"
             size="sm"
@@ -55,7 +62,7 @@ export function StepRow({
             <Trash2 />
           </Button>
         </div>
-      </div>
-    </li>
+      </TableCell>
+    </TableRow>
   );
 }

@@ -7,6 +7,7 @@ import type {
   PixelInput,
   Profile,
   ProfileInput,
+  ScreenshotViewRequest,
   Tracker,
   TrackerInput,
   WindowedProcess,
@@ -15,6 +16,7 @@ import type {
 interface Options {
   profiles?: Profile[];
   processes?: WindowedProcess[];
+  viewerRequest?: ScreenshotViewRequest;
 }
 
 type Args = Record<string, unknown>;
@@ -37,12 +39,15 @@ export const KEY_CODES: KeyCodeInfo[] = [
 ];
 
 /** In-memory stand-in for the Rust commands, installed through `mockIPC`. */
-export function createFakeBackend({ profiles = [], processes = [] }: Options = {}) {
+export function createFakeBackend({ profiles = [], processes = [], viewerRequest }: Options = {}) {
   const state = {
     profiles: structuredClone(profiles),
     processes: structuredClone(processes),
+    viewerRequest: viewerRequest ?? null as ScreenshotViewRequest | null,
+    viewerVisible: false,
   };
   const failures = new Map<string, string>();
+  const pending = new Map<string, Promise<void>>();
   const calls: { command: string; args: Args }[] = [];
   let lastId = 0;
   const nextId = () => `generated-${++lastId}`;
@@ -173,6 +178,18 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
       case "pixel_view_open":
         findPixel(args);
         return null;
+      case "screenshot_view_request":
+        return structuredClone(state.viewerRequest);
+      case "screenshot_view_ready":
+        if (state.viewerRequest?.sequence === args.sequence) state.viewerVisible = true;
+        return null;
+      case "screenshot_view_close":
+      case "screenshot_view_failed":
+        if (state.viewerRequest?.sequence === args.sequence) {
+          state.viewerVisible = false;
+          state.viewerRequest = null;
+        }
+        return null;
       case "screenshots_dir":
         return SCREENSHOTS_DIR;
       case "windowed_processes_list":
@@ -201,12 +218,18 @@ export function createFakeBackend({ profiles = [], processes = [] }: Options = {
         failures.set(command, message);
       }
     },
+    hold(command: string) {
+      let release!: () => void;
+      pending.set(command, new Promise<void>((resolve) => { release = resolve; }));
+      return () => { pending.delete(command); release(); };
+    },
     /** Events sent with `emit` from `@tauri-apps/api/event` reach the app's listeners. */
     install() {
       mockIPC(
-        (command, payload) => {
+        async (command, payload) => {
           const args = (payload ?? {}) as Args;
           calls.push({ command, args });
+          await pending.get(command);
           const failure = failures.get(command);
           if (failure !== undefined) {
             return Promise.reject(failure);

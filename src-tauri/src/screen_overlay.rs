@@ -1,5 +1,5 @@
 //! Borderless top-most window over the primary monitor that shows a screenshot one to one,
-//! either to pick a point (`view=picker`) or to view a picked pixel (`view=viewer`).
+//! to pick a point (`view=picker`).
 
 use std::time::{Duration, Instant};
 
@@ -21,13 +21,9 @@ const LABEL: &str = "screen-overlay";
 const MAIN_LABEL: &str = "main";
 
 pub fn open_picker(app: &AppHandle, profile_id: Uuid, pixel_id: Uuid) -> AppResult<()> {
-    open(app, &format!("view=picker&profileId={profile_id}&pixelId={pixel_id}"))
-}
-
-pub fn open_viewer(app: &AppHandle, profile_id: Uuid, pixel_id: Uuid, x: u32, y: u32) -> AppResult<()> {
     open(
         app,
-        &format!("view=viewer&profileId={profile_id}&pixelId={pixel_id}&x={x}&y={y}"),
+        &format!("view=picker&profileId={profile_id}&pixelId={pixel_id}"),
     )
 }
 
@@ -73,7 +69,9 @@ fn open(app: &AppHandle, query: &str) -> AppResult<()> {
             let app = app.clone();
             window.on_window_event(move |event| {
                 if let WindowEvent::Destroyed = event {
-                    let _ = app.state::<PixelCapture>().send(CaptureCommand::OverlayClosed);
+                    let _ = app
+                        .state::<PixelCapture>()
+                        .send(CaptureCommand::OverlayClosed);
                 }
             });
             window
@@ -139,7 +137,12 @@ impl CaptureEnv for TauriCaptureEnv {
         shutter::play();
     }
 
-    fn show_picker(&self, game: WindowHandle, request: CaptureRequest, pixel_id: Uuid) -> AppResult<()> {
+    fn show_picker(
+        &self,
+        game: WindowHandle,
+        request: CaptureRequest,
+        pixel_id: Uuid,
+    ) -> AppResult<()> {
         foreground::minimize(game);
         open_picker(&self.app, request.profile_id, pixel_id)
     }

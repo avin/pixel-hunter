@@ -99,3 +99,12 @@ export interface TrackerInput {
   preActionDelayMs: DelayRange;
   resumeDelayMs: number;
 }
+
+/** Latest request sent to the reusable screenshot viewer. */
+export interface ScreenshotViewRequest {
+  sequence: number;
+  profileId: string;
+  pixelId: string;
+  x: number;
+  y: number;
+}

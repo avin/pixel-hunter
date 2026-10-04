@@ -13,6 +13,7 @@ mod processes;
 mod profiles;
 mod screen;
 mod screen_overlay;
+mod screenshot_viewer;
 mod screenshots;
 mod shutter;
 
@@ -46,6 +47,8 @@ pub fn run() {
             app.manage(loaded.store);
             app.manage(Screenshots::new(app_data_dir.join("screenshots")));
             app.manage(PixelCapture::default());
+            app.manage(screenshot_viewer::ScreenshotViewer::default());
+            screenshot_viewer::register_cleanup(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -69,6 +72,10 @@ pub fn run() {
             commands::pixel_capture_cancel,
             commands::pixel_capture_pick,
             commands::pixel_view_open,
+            screenshot_viewer::screenshot_view_request,
+            screenshot_viewer::screenshot_view_ready,
+            screenshot_viewer::screenshot_view_close,
+            screenshot_viewer::screenshot_view_failed,
             commands::screenshots_dir,
             commands::windowed_processes_list,
         ])

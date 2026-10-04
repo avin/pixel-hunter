@@ -13,14 +13,14 @@ export function CaptureStatusPanel({ status, processName, onCancel, onDismiss }:
     return (
       <div
         role="alert"
-        className="flex items-center justify-between gap-3 rounded-lg border border-destructive/40 px-4 py-3 text-sm"
+        className="flex shrink-0 items-center justify-between gap-2 border-b border-destructive/40 px-3 py-2 text-xs"
       >
-        <p>
+        <p className="min-w-0 break-words">
           {status.phase === "timeout"
             ? "Окно игры не стало активным за 10 секунд. Пиксель не добавлен."
             : status.reason}
         </p>
-        <Button variant="ghost" size="sm" onClick={onDismiss}>
+        <Button variant="ghost" size="sm" className="shrink-0" onClick={onDismiss}>
           Закрыть
         </Button>
       </div>
@@ -28,16 +28,16 @@ export function CaptureStatusPanel({ status, processName, onCancel, onDismiss }:
   }
 
   return (
-    <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 px-4 py-3 text-sm">
-      <div className="flex items-baseline gap-2">
-        <p role="status">{phaseMessage(status, processName)}</p>
+    <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/50 px-3 py-2 text-xs">
+      <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+        <p role="status" aria-label="Состояние захвата">{phaseMessage(status, processName)}</p>
         {"remainingMs" in status && (
-          <span className="font-medium tabular-nums">
+          <span className="shrink-0 font-mono font-medium tabular-nums">
             {Math.ceil(status.remainingMs / 1000)} с
           </span>
         )}
       </div>
-      <Button variant="outline" size="sm" onClick={onCancel}>
+      <Button variant="outline" size="sm" className="shrink-0" onClick={onCancel}>
         Отмена
       </Button>
     </div>

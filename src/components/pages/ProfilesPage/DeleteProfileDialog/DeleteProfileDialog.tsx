@@ -14,15 +14,17 @@ import type { Profile } from "@/store/types";
 interface Props {
   profile: Profile;
   onClose: () => void;
+  onDeleted?: () => void;
 }
 
-export function DeleteProfileDialog({ profile, onClose }: Props) {
+export function DeleteProfileDialog({ profile, onClose, onDeleted }: Props) {
   const [deleteProfile, { isLoading }] = useDeleteProfileMutation();
 
   async function handleDelete() {
     const result = await deleteProfile({ id: profile.id });
     if (!("error" in result)) {
       onClose();
+      onDeleted?.();
     }
   }
 

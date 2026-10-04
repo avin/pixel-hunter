@@ -1,7 +1,8 @@
+import { emit } from "@tauri-apps/api/event";
 import { mockConvertFileSrc, mockWindows } from "@tauri-apps/api/mocks";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppStore } from "@/store";
 import { createFakeBackend } from "@/test/fakeBackend";
 import { ScreenOverlayApp } from "./ScreenOverlayApp";
@@ -12,9 +13,10 @@ function setDevicePixelRatio(value: number) {
 
 function renderOverlay(search: string, devicePixelRatio = 1) {
   setDevicePixelRatio(devicePixelRatio);
-  mockWindows("screen-overlay");
+  const isViewer = new URLSearchParams(search).get("view") === "viewer";
+  mockWindows(isViewer ? "screenshot-viewer" : "screen-overlay");
   mockConvertFileSrc("windows");
-  const backend = createFakeBackend();
+  const backend = createFakeBackend({ viewerRequest: isViewer ? { sequence: 1, profileId: "profile-1", pixelId: "pixel-1", x: 812, y: 1040 } : undefined });
   backend.install();
   const user = userEvent.setup();
   render(<ScreenOverlayApp store={createAppStore()} search={search} />);
@@ -30,7 +32,11 @@ async function loadScreenshot(width: number, height: number) {
   return image;
 }
 
-afterEach(() => setDevicePixelRatio(1));
+afterEach(() => {
+  setDevicePixelRatio(1);
+  Object.defineProperty(window, "innerWidth", { value: 1024, configurable: true });
+  Object.defineProperty(window, "innerHeight", { value: 768, configurable: true });
+});
 
 describe("ScreenOverlayApp picker", () => {
   const search = "?view=picker&profileId=profile-1&pixelId=pixel-1";
@@ -95,17 +101,96 @@ describe("ScreenOverlayApp picker", () => {
 });
 
 describe("ScreenOverlayApp viewer", () => {
-  const search = "?view=viewer&profileId=profile-1&pixelId=pixel-1&x=812&y=1040";
+  const search = "?view=viewer";
 
-  it("marks the pixel with a cross one physical pixel thick", async () => {
+  it("keeps the viewer hidden until the screenshot is decoded", async () => {
+    const { backend } = renderOverlay(search);
+    const image = await screen.findByRole("img", { name: "Снимок экрана" });
+    let resolve!: () => void;
+    const decoded = new Promise<void>((done) => { resolve = done; });
+    Object.defineProperty(image, "decode", { value: vi.fn(() => decoded) });
+    await loadScreenshot(1920, 1080);
+    expect(backend.callsOf("screenshot_view_ready")).toHaveLength(0);
+    expect(backend.state.viewerVisible).toBe(false);
+    await act(async () => { resolve(); await decoded; });
+    await waitFor(() => expect(backend.state.viewerVisible).toBe(true));
+    expect(backend.callsOf("screenshot_view_ready")).toEqual([{ sequence: 1 }]);
+  });
+
+  it("hides and reuses the viewer for the next screenshot", async () => {
+    const { user, backend } = renderOverlay(search);
+    await loadScreenshot(1920, 1080);
+    await waitFor(() => expect(backend.state.viewerVisible).toBe(true));
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(backend.state.viewerVisible).toBe(false));
+    expect(backend.callsOf("plugin:window|close")).toHaveLength(0);
+    const next = { sequence: 2, profileId: "profile-1", pixelId: "next-pixel", x: 25, y: 40 };
+    backend.state.viewerRequest = next;
+    await act(async () => { await emit("screenshot-viewer://open", next); });
+    const image = await loadScreenshot(1000, 2000);
+    expect(image).toHaveAttribute("src", expect.stringContaining("next-pixel.png"));
+    await waitFor(() => expect(backend.state.viewerVisible).toBe(true));
+    expect(screen.getByRole("img", { name: "Пиксель (25, 40)" })).toBeInTheDocument();
+    await user.keyboard("a");
+    await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toEqual([{ sequence: 1 }, { sequence: 2 }]));
+  });
+
+  it("does not show an old image that finishes decoding after a new request", async () => {
+    const { backend } = renderOverlay(search);
+    const image = await screen.findByRole("img", { name: "Снимок экрана" });
+    let resolve!: () => void;
+    const decoded = new Promise<void>((done) => { resolve = done; });
+    Object.defineProperty(image, "decode", { value: vi.fn(() => decoded) });
+    await loadScreenshot(1920, 1080);
+    const next = { sequence: 2, profileId: "profile-1", pixelId: "next-pixel", x: 25, y: 40 };
+    backend.state.viewerRequest = next;
+    await act(async () => { await emit("screenshot-viewer://open", next); });
+    await act(async () => { resolve(); await decoded; });
+    expect(backend.callsOf("screenshot_view_ready")).toHaveLength(0);
+    await loadScreenshot(1920, 1080);
+    await waitFor(() => expect(backend.callsOf("screenshot_view_ready")).toEqual([{ sequence: 2 }]));
+  });
+
+  it("keeps the viewer hidden when an image fails to load", async () => {
+    const { backend } = renderOverlay(search);
+    const image = await screen.findByRole("img", { name: "Снимок экрана" });
+    fireEvent.error(image);
+    await waitFor(() => expect(backend.callsOf("screenshot_view_failed")).toEqual([{ sequence: 1 }]));
+    expect(backend.state.viewerVisible).toBe(false);
+    expect(backend.callsOf("screenshot_view_ready")).toHaveLength(0);
+  });
+
+  it("keeps the marker on the selected image pixel in a scaled preview", async () => {
     renderOverlay(search, 1.5);
     await loadScreenshot(3840, 2160);
 
     const marker = screen.getByRole("img", { name: "Пиксель (812, 1040)" });
     const [horizontal, vertical] = marker.querySelectorAll("line");
-    expect(horizontal).toHaveAttribute("y1", String(1040.5 / 1.5));
-    expect(vertical).toHaveAttribute("x1", String(812.5 / 1.5));
-    expect(marker.querySelector("g")).toHaveAttribute("stroke-width", String(1 / 1.5));
+    expect(horizontal).toHaveAttribute("y1", String(1040.5));
+    expect(vertical).toHaveAttribute("x1", String(812.5));
+    expect(marker.querySelector("g")).toHaveAttribute("stroke-width", String(1));
+  });
+
+  it.each([
+    [1920, 1080, 900, 506.25],
+    [1000, 2000, 360, 720],
+  ])("fits a %s by %s screenshot within 90 percent of the screen", async (width, height, shownWidth, shownHeight) => {
+    Object.defineProperty(window, "innerWidth", { value: 1000, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 800, configurable: true });
+    renderOverlay(search, 1.5);
+    const image = await loadScreenshot(width, height);
+    expect(image).toHaveStyle({ width: `${shownWidth}px`, height: `${shownHeight}px` });
+    Object.defineProperty(window, "innerWidth", { value: 500, configurable: true });
+    Object.defineProperty(window, "innerHeight", { value: 400, configurable: true });
+    fireEvent(window, new Event("resize"));
+    expect(image).toHaveStyle({ width: `${shownWidth / 2}px`, height: `${shownHeight / 2}px` });
+  });
+
+  it("closes when the screenshot itself is clicked", async () => {
+    const { user, backend } = renderOverlay(search);
+    const image = await loadScreenshot(1920, 1080);
+    await user.pointer({ keys: "[MouseRight]", target: image });
+    await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toHaveLength(1));
   });
 
   it("closes on a click", async () => {
@@ -114,15 +199,15 @@ describe("ScreenOverlayApp viewer", () => {
 
     await user.pointer({ keys: "[MouseLeft]", target: document.body });
 
-    await waitFor(() => expect(backend.callsOf("plugin:window|close")).toHaveLength(1));
+    await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toHaveLength(1));
   });
 
-  it("closes on any key", async () => {
+  it.each(["a", "{Escape}", "{Enter}", "{Shift}"])("closes on key %s", async (key) => {
     const { user, backend } = renderOverlay(search);
     await loadScreenshot(1920, 1080);
 
-    await user.keyboard("a");
+    await user.keyboard(key);
 
-    await waitFor(() => expect(backend.callsOf("plugin:window|close")).toHaveLength(1));
+    await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toHaveLength(1));
   });
 });

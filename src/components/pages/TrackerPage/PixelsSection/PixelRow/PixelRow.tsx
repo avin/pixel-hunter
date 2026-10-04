@@ -83,25 +83,27 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
           <button
             type="button"
             aria-label={`Открыть снимок пикселя ${point}`}
-            className="block rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            className="block outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             onClick={() => void openViewer(pixelArgs)}
           >
             <img
               src={screenshotSrc(screenshotsDir, profileId, pixel.id, "thumbnail")}
               alt=""
               loading="lazy"
-              className="h-14 w-28 rounded-md border bg-muted object-contain"
+              width={64}
+              height={32}
+              className="h-8 w-16 border bg-muted object-contain"
               onError={() => setHasThumbnailError(true)}
             />
           </button>
         ) : (
-          <div className="flex h-14 w-28 items-center justify-center rounded-md border border-dashed bg-muted text-muted-foreground">
+          <div className="flex h-8 w-16 items-center justify-center border border-dashed bg-muted text-muted-foreground">
             <ImageOff aria-hidden className="size-4" />
             <span className="sr-only">Снимок недоступен</span>
           </div>
         )}
       </TableCell>
-      <TableCell className="tabular-nums">
+      <TableCell className="font-mono tabular-nums">
         {pixel.x}, {pixel.y}
       </TableCell>
       <TableCell>
@@ -127,7 +129,7 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
             }
           }}
         >
-          <SelectTrigger size="sm" aria-label={`Условие пикселя ${point}`}>
+          <SelectTrigger size="sm" className="w-28" aria-label={`Условие пикселя ${point}`}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false}>
@@ -151,7 +153,7 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
             aria-label={`Допуск пикселя ${point}, %`}
             aria-invalid={toleranceError ? true : undefined}
             aria-describedby={toleranceError ? toleranceErrorId : undefined}
-            className="h-7 w-20"
+            className="h-7 w-20 font-mono tabular-nums"
             onChange={(event) => {
               form.setValue("tolerance", event.currentTarget.value);
               reveal.change("tolerance");

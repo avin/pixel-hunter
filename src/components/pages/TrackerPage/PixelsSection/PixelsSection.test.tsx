@@ -44,7 +44,7 @@ describe("Pixel capture on TrackerPage", () => {
     expect(backend.callsOf("pixel_capture_start")).toEqual([
       { profileId: "profile-1", trackerId: "tracker-1" },
     ]);
-    expect(screen.getByRole("status")).toHaveTextContent(
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent(
       "Переключитесь в окно игры game.exe",
     );
     expect(screen.getByText("10 с")).toBeInTheDocument();
@@ -59,11 +59,11 @@ describe("Pixel capture on TrackerPage", () => {
     expect(screen.getByText("8 с")).toBeInTheDocument();
 
     await emitStatus({ phase: "countdown", remainingMs: 2_100 });
-    expect(screen.getByRole("status")).toHaveTextContent("Снимок экрана через");
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Снимок экрана через");
     expect(screen.getByText("3 с")).toBeInTheDocument();
 
     await emitStatus({ phase: "picking" });
-    expect(screen.getByRole("status")).toHaveTextContent("Выберите точку на снимке");
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Выберите точку на снимке");
     expect(addButton()).toBeDisabled();
 
     backend.state.profiles[0].trackers[0].pixels.push(pixelFixture());
@@ -72,7 +72,7 @@ describe("Pixel capture on TrackerPage", () => {
     expect(await screen.findByRole("cell", { name: "812, 1040" })).toBeInTheDocument();
     expect(conditionSelect()).toHaveTextContent("Равно");
     expect(toleranceInput()).toHaveValue(10);
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
     expect(addButton()).toBeEnabled();
   });
 
@@ -84,7 +84,7 @@ describe("Pixel capture on TrackerPage", () => {
     expect(backend.callsOf("pixel_capture_cancel")).toHaveLength(1);
 
     await emitStatus({ phase: "cancelled" });
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
     expect(addButton()).toBeEnabled();
     expect(screen.getByText("Пикселей пока нет")).toBeInTheDocument();
   });
@@ -124,7 +124,7 @@ describe("Pixel capture on TrackerPage", () => {
     await user.click(screen.getByRole("link", { name: "Здоровье" }));
 
     expect(await screen.findByRole("button", { name: "Добавить пиксель" })).toBeDisabled();
-    expect(screen.getByRole("status")).toHaveTextContent("Переключитесь в окно игры");
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Переключитесь в окно игры");
   });
 
   it("shows the error when a capture cannot start", async () => {
@@ -135,7 +135,7 @@ describe("Pixel capture on TrackerPage", () => {
 
     expect(await screen.findByText("Захват пикселя уже идёт")).toBeInTheDocument();
     await waitFor(() => expect(addButton()).toBeEnabled());
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
   });
 });
 

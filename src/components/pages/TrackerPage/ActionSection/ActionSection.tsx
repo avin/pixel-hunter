@@ -27,8 +27,8 @@ export function ActionSection({ profileId, tracker }: Props) {
   const { Editor } = actionTypes[action.type];
 
   return (
-    <section aria-labelledby={headingId} className="flex flex-col gap-4 border-t p-6">
-      <h2 id={headingId} className="font-heading text-base font-medium">
+    <section aria-labelledby={headingId} className="flex min-h-0 flex-col gap-2 overflow-hidden border p-2">
+      <h2 id={headingId} className="font-heading text-sm font-medium">
         Действие
       </h2>
 

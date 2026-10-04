@@ -9,20 +9,28 @@ interface Props {
 }
 
 export function GameWindowStatus({ profileId, processName }: Props) {
-  const isGameActive = useAppSelector((state) => gameActiveSelector(state, profileId));
+  const isGameActive = useAppSelector((state) =>
+    gameActiveSelector(state, profileId),
+  );
 
   return (
     <p
       role="status"
       className={cn(
-        "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm",
-        isGameActive ? "border-primary/40" : "text-muted-foreground",
+        "flex min-w-0 items-center gap-2 text-xs",
+        !isGameActive && "text-muted-foreground",
       )}
     >
-      {isGameActive ? <MonitorCheck className="size-4" /> : <Hourglass className="size-4" />}
-      {isGameActive
-        ? "Окно игры активно, отслеживания работают"
-        : `Ожидание окна игры ${processName}`}
+      {isGameActive ? (
+        <MonitorCheck className="size-4 shrink-0" />
+      ) : (
+        <Hourglass className="size-4 shrink-0" />
+      )}
+      <span className="truncate">
+        {isGameActive
+          ? "Окно игры активно"
+          : `Ожидание окна игры ${processName}`}
+      </span>
     </p>
   );
 }

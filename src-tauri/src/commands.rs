@@ -185,8 +185,9 @@ pub fn pixel_capture_pick(capture: State<'_, PixelCapture>, x: u32, y: u32) -> A
     capture.send(CaptureCommand::Pick { x, y })
 }
 
+// WebView2 window creation deadlocks in synchronous commands on Windows.
 #[tauri::command]
-pub fn pixel_view_open(
+pub async fn pixel_view_open(
     app: AppHandle,
     store: State<'_, ConfigStore>,
     profile_id: Uuid,
@@ -194,7 +195,7 @@ pub fn pixel_view_open(
     pixel_id: Uuid,
 ) -> AppResult<()> {
     let pixel = profiles::get_pixel(&store, profile_id, tracker_id, pixel_id)?;
-    screen_overlay::open_viewer(&app, profile_id, pixel.id, pixel.x, pixel.y)
+    crate::screenshot_viewer::open_viewer(&app, profile_id, pixel.id, pixel.x, pixel.y)
 }
 
 #[tauri::command]

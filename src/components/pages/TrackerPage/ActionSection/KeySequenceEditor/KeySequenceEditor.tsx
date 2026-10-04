@@ -2,6 +2,13 @@ import { Plus } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Table,
+  TableBody,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { useActionUpdateMutation, useKeyCodesListQuery } from "@/store/api";
 import type { KeyCombo, KeyStep } from "@/store/types";
 import type { ActionEditorProps } from "../actionTypes";
@@ -22,16 +29,16 @@ export function KeySequenceEditor({ profileId, trackerId, action }: Props) {
   if (keyCodes.isLoading) {
     return (
       <div role="status" aria-label="Загрузка клавиш" className="flex flex-col gap-2">
-        <Skeleton className="h-10" />
+        <Skeleton className="h-8" />
         <Skeleton className="h-8 w-40" />
       </div>
     );
   }
   if (!keyCodes.data) {
     return (
-      <div role="alert" className="flex flex-col items-start gap-3">
+      <div role="alert" className="flex items-center gap-2 px-3 py-2">
         <p className="text-sm">Не удалось загрузить список клавиш.</p>
-        <Button variant="outline" onClick={() => keyCodes.refetch()}>
+        <Button variant="outline" size="sm" onClick={() => keyCodes.refetch()}>
           Повторить
         </Button>
       </div>
@@ -62,42 +69,55 @@ export function KeySequenceEditor({ profileId, trackerId, action }: Props) {
   const showUnsupported = () => setIsUnsupportedShown(true);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       {steps.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed px-6 py-8 text-center">
-          <h3 className="font-heading text-base font-medium">Нажатия не настроены</h3>
-          <p className="max-w-sm text-sm text-muted-foreground">
+        <div className="min-h-0 flex-1 overflow-auto px-3 py-3">
+          <h3 className="text-sm font-medium">Нажатия не настроены</h3>
+          <p className="mt-1 text-xs text-muted-foreground">
             Добавьте клавиши и сочетания, которые приложение нажмёт в игре по порядку.
           </p>
         </div>
       ) : (
-        <ol aria-label="Шаги последовательности" className="flex flex-col gap-2">
-          {steps.map((step, index) => (
-            <StepRow
-              key={step.id}
-              stepNumber={index + 1}
-              step={step}
-              label={comboLabel(step.combo, keyLabels)}
-              supportedCodes={supportedCodes}
-              onChange={(changed) =>
-                save(steps.map((candidate) => (candidate.id === step.id ? changed : candidate)))
-              }
-              onDelete={() => deleteStep(index)}
-              onUnsupported={showUnsupported}
-            />
-          ))}
-        </ol>
+        <div className="min-h-0 flex-1 overflow-hidden [&>div]:h-full [&>div]:overflow-auto">
+          <Table aria-label="Шаги последовательности" className="min-w-[560px] text-xs [&_td]:py-1 [&_th]:h-8">
+            <TableHeader className="sticky top-0 z-10 bg-background">
+              <TableRow>
+                <TableHead className="w-10">№</TableHead>
+                <TableHead>Сочетание</TableHead>
+                <TableHead className="w-52">Задержка, мс</TableHead>
+                <TableHead className="w-36"><span className="sr-only">Команды</span></TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {steps.map((step, index) => (
+                <StepRow
+                  key={step.id}
+                  stepNumber={index + 1}
+                  step={step}
+                  label={comboLabel(step.combo, keyLabels)}
+                  supportedCodes={supportedCodes}
+                  onChange={(changed) =>
+                    save(steps.map((candidate) => (candidate.id === step.id ? changed : candidate)))
+                  }
+                  onDelete={() => deleteStep(index)}
+                  onUnsupported={showUnsupported}
+                />
+              ))}
+            </TableBody>
+          </Table>
+        </div>
       )}
 
       {isUnsupportedShown && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="shrink-0 px-3 py-2 text-xs text-destructive">
           Эта клавиша не поддерживается. Нажмите другую.
         </p>
       )}
 
-      <div>
+      <div className="shrink-0 border-t px-3 py-2">
         <KeyRecorder
           variant="outline"
+          size="sm"
           supportedCodes={supportedCodes}
           onRecord={addStep}
           onUnsupported={showUnsupported}
