@@ -28,9 +28,11 @@ describe("ProfileDialog", () => {
 
     await user.type(nameInput(), "Diablo");
     await user.click(screen.getByRole("combobox", { name: "Процесс игры" }));
-    const option = await screen.findByRole("option", { name: /game\.exe/ });
-    expect(option).toHaveTextContent("Diablo");
+    const option = await screen.findByRole("option", { name: "game.exe" });
+    expect(option).toHaveTextContent(/^game\.exe$/);
     await user.click(option);
+    expect(within(screen.getByRole("combobox", { name: "Процесс игры" })).getByText("game.exe", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("Diablo", { exact: true })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Создать" }));
 
     const row = (await screen.findByRole("link", { name: "Diablo" })).closest("tr")!;
@@ -131,7 +133,12 @@ describe("ProfileDialog", () => {
     );
     expect(screen.getByRole("dialog", { name: "Редактирование профиля" })).toBeInTheDocument();
     expect(nameInput()).toHaveValue("Diablo");
-    expect(screen.getByRole("combobox", { name: "Процесс игры" })).toHaveTextContent("game.exe");
+    expect(within(screen.getByRole("combobox", { name: "Процесс игры" })).getByText("game.exe", { exact: true })).toBeInTheDocument();
+    expect(screen.queryByText("не запущен")).not.toBeInTheDocument();
+    await user.click(screen.getByRole("combobox", { name: "Процесс игры" }));
+    expect(await screen.findByRole("option", { name: "game.exe" })).toHaveTextContent(/^game\.exe$/);
+    expect(screen.queryByText("не запущен")).not.toBeInTheDocument();
+    await user.keyboard("{Escape}");
 
     await chooseProcess(user, "notepad.exe");
     await user.click(screen.getByRole("button", { name: "Сохранить" }));
