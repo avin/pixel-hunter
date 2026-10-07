@@ -156,7 +156,7 @@ describe("ProfilePage", () => {
       id: "health",
       name: "Здоровье",
       pixels: [pixelFixture()],
-      action: { type: "keySequence", steps: [keyStepFixture()] },
+      action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
     });
     const runToggle = (name = "Здоровье") =>
       screen.getByRole("button", { name: new RegExp(`^(Старт|Стоп) отслеживания «${name}»$`) });
@@ -202,7 +202,7 @@ describe("ProfilePage", () => {
       await openProfile(
         profileFixture({
           trackers: [
-            { ...complete, action: { type: "keySequence", steps: [] } },
+            { ...complete, action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [] } },
           ],
         }),
       );
@@ -234,7 +234,7 @@ describe("ProfilePage", () => {
   describe("game window indicator", () => {
     const running = trackerFixture({
       pixels: [pixelFixture()],
-      action: { type: "keySequence", steps: [keyStepFixture()] },
+      action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
       isRunning: true,
     });
 

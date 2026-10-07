@@ -9,7 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useActionUpdateMutation, useKeyCodesListQuery } from "@/store/api";
+import { useKeyCodesListQuery } from "@/store/api";
 import type { KeyCombo, KeyStep } from "@/store/types";
 import type { ActionEditorProps } from "../actionTypes";
 import { comboLabel } from "./comboLabel";
@@ -20,9 +20,8 @@ type Props = ActionEditorProps<"keySequence">;
 
 const DEFAULT_STEP_DELAY_MS = { min: 100, max: 200 };
 
-export function KeySequenceEditor({ profileId, trackerId, action }: Props) {
+export function KeySequenceEditor({ action, onChange }: Props) {
   const keyCodes = useKeyCodesListQuery();
-  const [updateAction] = useActionUpdateMutation();
   const [isUnsupportedShown, setIsUnsupportedShown] = useState(false);
   const { steps } = action;
 
@@ -50,7 +49,7 @@ export function KeySequenceEditor({ profileId, trackerId, action }: Props) {
 
   function save(nextSteps: KeyStep[]) {
     setIsUnsupportedShown(false);
-    void updateAction({ profileId, trackerId, action: { ...action, steps: nextSteps } });
+    onChange({ ...action, steps: nextSteps });
   }
 
   function addStep(combo: KeyCombo) {

@@ -7,6 +7,7 @@ pub enum AppError {
     Io(std::io::Error),
     /// Screen capture, screenshot files or windows of the capture flow.
     Capture(String),
+    Audio(String),
 }
 
 impl fmt::Display for AppError {
@@ -15,6 +16,7 @@ impl fmt::Display for AppError {
             AppError::Validation(message) => f.write_str(message),
             AppError::NotFound(message) => f.write_str(message),
             AppError::Capture(message) => f.write_str(message),
+            AppError::Audio(message) => f.write_str(message),
             AppError::Io(error) => write!(f, "Не удалось сохранить конфигурацию: {error}"),
         }
     }

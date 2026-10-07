@@ -401,7 +401,7 @@ describe("TrackerPage", () => {
 
   it("preserves draft through immediate pixel, action and run changes", async () => {
     const { user, backend } = await openTracker(trackerFixture({
-      pixels: [pixelFixture()], action: { type: "keySequence", steps: [keyStepFixture()] },
+      pixels: [pixelFixture()], action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
     }));
     await user.type(nameInput(), " новый");
     const tolerance = screen.getByRole("spinbutton", { name: "Допуск пикселя (812, 1040), %" });

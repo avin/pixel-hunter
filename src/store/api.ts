@@ -2,6 +2,7 @@ import { createApi } from "@reduxjs/toolkit/query/react";
 import { tauriBaseQuery } from "./tauriBaseQuery";
 import type {
   Action,
+  ActionSoundInfo,
   KeyCodeInfo,
   Pixel,
   PixelInput,
@@ -129,6 +130,16 @@ export const tauriApi = createApi({
       query: () => ({ command: "key_codes_list" }),
       keepUnusedDataFor: Infinity,
     }),
+    actionSoundsList: builder.query<ActionSoundInfo[], void>({
+      query: () => ({ command: "action_sounds_list" }),
+      keepUnusedDataFor: Infinity,
+    }),
+    actionSoundPreview: builder.mutation<void, { id: string; volumePercent: number }>({
+      query: (args) => ({ command: "action_sound_preview", args }),
+    }),
+    actionSoundStopPreview: builder.mutation<void, void>({
+      query: () => ({ command: "action_sound_stop_preview" }),
+    }),
     pixelUpdate: builder.mutation<Pixel, PixelArgs & { input: PixelInput }>({
       query: ({ profileId, trackerId, pixelId, input }) => ({
         command: "pixel_update",
@@ -205,6 +216,9 @@ export const {
   useEngineDeactivateMutation,
   useActionUpdateMutation,
   useKeyCodesListQuery,
+  useActionSoundsListQuery,
+  useActionSoundPreviewMutation,
+  useActionSoundStopPreviewMutation,
   usePixelUpdateMutation,
   usePixelDeleteMutation,
   usePixelCaptureStartMutation,

@@ -14,6 +14,8 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::action::Action;
+use crate::action_sound::AudioService;
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::keyboard;
@@ -38,7 +40,12 @@ pub struct Engine {
 
 impl Engine {
     /// Starts the poll and executor threads; they idle until a profile is activated.
+    #[cfg(test)]
     pub fn start(emit: impl Fn(EngineStatus) + Send + 'static) -> Self {
+        Self::start_with_audio(AudioService::start(), emit)
+    }
+
+    pub fn start_with_audio(audio: AudioService, emit: impl Fn(EngineStatus) + Send + 'static) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (jobs, job_receiver) = mpsc::channel();
         let cancelled = Arc::new(CancelledJobs::default());
@@ -52,9 +59,7 @@ impl Engine {
                 &executor_cancelled,
                 &executor_paused,
                 |action| {
-                    if let Err(error) = keyboard::run_action(action) {
-                        eprintln!("Действие не выполнено: {error}");
-                    }
+                    play_action(action, |sound| audio.play_runtime(sound), keyboard::run_action);
                 },
                 thread::sleep,
                 |ticket| {
@@ -134,6 +139,21 @@ impl Engine {
         self.active_profile
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// Called only after executor cancellation and capture-pause checks. Audio submission
+/// does not wait for playback, so key completion still controls ActionDone.
+fn play_action(
+    action: &Action,
+    mut sound: impl FnMut(&crate::action::SoundSettings),
+    keys: impl FnOnce(&Action) -> AppResult<()>,
+) {
+    if action.sound.id.is_some() && action.sound.volume_percent > 0 {
+        sound(&action.sound);
+    }
+    if let Err(error) = keys(action) {
+        eprintln!("Действие не выполнено: {error}");
     }
 }
 

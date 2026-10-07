@@ -247,7 +247,7 @@ mod tests {
                         "preActionDelayMs": { "min": 100, "max": 300 },
                         "resumeDelayMs": 1000,
                         "pixels": [],
-                        "action": { "type": "keySequence", "steps": [] },
+                        "action": { "type": "keySequence", "steps": [], "sound": { "id": null, "volumePercent": 50 } },
                         "isRunning": false,
                     }],
                 }],

@@ -55,7 +55,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{KeyCombo, KeySequenceAction, KeyStep};
+    use crate::action::{ActionKind, KeyCombo, KeySequenceAction, KeyStep};
     use crate::key_sequence::{execute_key_sequence, InputSink, KeyEvent, Sleeper};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
@@ -65,6 +65,7 @@ mod tests {
 
     #[derive(Debug, Clone, PartialEq)]
     enum Entry {
+        Sound(String, u8),
         Key(u16, bool),
         Done(u64),
     }
@@ -93,7 +94,7 @@ mod tests {
     }
 
     fn keys(codes: &[&str]) -> Action {
-        Action::KeySequence(KeySequenceAction {
+        Action::key_sequence(KeySequenceAction {
             steps: codes
                 .iter()
                 .enumerate()
@@ -137,8 +138,14 @@ mod tests {
             cancelled,
             &AtomicBool::new(false),
             |action| {
-                let Action::KeySequence(sequence) = action;
-                execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng).unwrap();
+                super::super::play_action(
+                    action,
+                    |sound| log.borrow_mut().push(Entry::Sound(sound.id.clone().unwrap(), sound.volume_percent)),
+                    |action| {
+                        let ActionKind::KeySequence(sequence) = &action.kind;
+                        execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
+                    },
+                );
             },
             |_| {},
             |ticket| log.borrow_mut().push(Entry::Done(ticket)),
@@ -149,6 +156,82 @@ mod tests {
     const Q: u16 = 0x10;
     const W: u16 = 0x11;
     const E: u16 = 0x12;
+
+    fn with_sound(mut action: Action, id: &str, volume: u8) -> Action {
+        action.sound.id = Some(id.into());
+        action.sound.volume_percent = volume;
+        action
+    }
+
+    #[test]
+    fn sound_starts_once_before_keys_and_done_does_not_wait_for_audio() {
+        let entries = run_jobs(
+            vec![job(1, with_sound(keys(&["KeyQ", "KeyW"]), "double-tap", 40))],
+            &CancelledJobs::default(),
+            None,
+        );
+        assert_eq!(entries, [
+            Entry::Sound("double-tap".into(), 40),
+            Entry::Key(Q, false), Entry::Key(Q, true),
+            Entry::Key(W, false), Entry::Key(W, true), Entry::Done(1),
+        ]);
+    }
+
+    #[test]
+    fn cancelled_and_muted_jobs_do_not_submit_audio() {
+        let cancelled = CancelledJobs::default();
+        cancelled.cancel([1]);
+        let entries = run_jobs(
+            vec![
+                job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50)),
+                job(2, with_sound(keys(&["KeyW"]), "soft-ping", 0)),
+                job(3, keys(&["KeyE"])),
+            ],
+            &cancelled, None,
+        );
+        assert_eq!(entries, [
+            Entry::Key(W, false), Entry::Key(W, true), Entry::Done(2),
+            Entry::Key(E, false), Entry::Key(E, true), Entry::Done(3),
+        ]);
+    }
+
+    #[test]
+    fn cancellation_during_capture_pause_skips_the_sound_callback() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50))).unwrap();
+        drop(sender);
+        let paused = AtomicBool::new(true);
+        let cancelled = CancelledJobs::default();
+        run(receiver, &cancelled, &paused,
+            |_| panic!("cancelled action must not submit sound or keys"),
+            |_| { cancelled.cancel([1]); paused.store(false, Ordering::SeqCst); },
+            |_| panic!("cancelled job must not finish as played"),
+        );
+    }
+
+    #[test]
+    fn unavailable_audio_device_does_not_skip_keys_or_job_completion() {
+        let audio = crate::action_sound::AudioService::unavailable_for_test();
+        assert!(audio.preview("soft-ping", 50).is_err());
+        let (sender, receiver) = mpsc::channel();
+        sender.send(job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50))).unwrap();
+        drop(sender);
+        let log = Log::default();
+        let sleeper = FakeSleeper { on_first_sleep: RefCell::new(None) };
+        let mut rng = StdRng::seed_from_u64(0);
+        run(receiver, &CancelledJobs::default(), &AtomicBool::new(false),
+            |action| super::super::play_action(action,
+                |sound| audio.play_runtime(sound),
+                |action| {
+                    let ActionKind::KeySequence(sequence) = &action.kind;
+                    execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
+                }),
+            |_| {},
+            |ticket| log.borrow_mut().push(Entry::Done(ticket)),
+        );
+        audio.shutdown();
+        assert_eq!(log.take(), [Entry::Key(Q, false), Entry::Key(Q, true), Entry::Done(1)]);
+    }
 
     #[test]
     fn plays_jobs_strictly_one_after_another() {

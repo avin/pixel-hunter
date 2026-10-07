@@ -168,7 +168,7 @@ fn queued_tickets(runs: &[Run]) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{KeyCombo, KeySequenceAction, KeyStep};
+    use crate::action::{ActionKind, KeyCombo, KeySequenceAction, KeyStep};
     use crate::config::{DelayRange, Pixel, PixelCondition};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
@@ -192,7 +192,7 @@ mod tests {
             max: delay.1,
         };
         tracker.resume_delay_ms = resume_delay_ms;
-        tracker.action = Action::KeySequence(KeySequenceAction {
+        tracker.action = Action::key_sequence(KeySequenceAction {
             steps: vec![KeyStep {
                 id: Uuid::new_v4(),
                 delay_before_ms: None,
@@ -529,11 +529,39 @@ mod tests {
         h.paint((1, 1), RED);
         h.tick(ms(0));
 
-        let Action::KeySequence(sequence) = &mut health.action;
+        let ActionKind::KeySequence(sequence) = &mut health.action.kind;
         sequence.steps[0].combo.key = "KeyW".into();
         h.core.set_trackers(&[health.clone()]);
 
         assert_eq!(h.run(50, 100)[0].1.action, health.action);
+    }
+
+    #[test]
+    fn sound_changes_during_pre_delay_apply_when_queued() {
+        let mut health = tracker(&[(1, 1)], (100, 100), 0);
+        let mut h = Harness::new(&[health.clone()]);
+        h.paint((1, 1), RED);
+        assert!(h.tick(ms(0)).is_empty());
+        health.action.sound = crate::action::SoundSettings { id: Some("bright-bell".into()), volume_percent: 20 };
+        h.core.set_trackers(&[health.clone()]);
+        assert_eq!(h.tick(ms(100))[0].action.sound, health.action.sound);
+    }
+
+    #[test]
+    fn queued_sound_is_a_snapshot_and_next_job_uses_updated_settings() {
+        let mut health = tracker(&[(1, 1)], (0, 0), 100);
+        health.action.sound.id = Some("soft-ping".into());
+        let mut h = Harness::new(&[health.clone()]);
+        h.paint((1, 1), RED);
+        let first = h.tick(ms(0)).remove(0);
+        health.action.sound = crate::action::SoundSettings { id: Some("bright-bell".into()), volume_percent: 20 };
+        h.core.set_trackers(&[health.clone()]);
+        assert_eq!(first.action.sound.id.as_deref(), Some("soft-ping"));
+        assert_eq!(first.action.sound.volume_percent, 50);
+        assert!(h.tick(ms(50)).is_empty());
+        h.core.action_done(first.ticket, ms(50));
+        assert!(h.tick(ms(100)).is_empty());
+        assert_eq!(h.tick(ms(150))[0].action.sound, health.action.sound);
     }
 
     #[test]

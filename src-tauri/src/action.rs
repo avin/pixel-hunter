@@ -7,34 +7,72 @@ use crate::key_codes;
 
 pub const DEFAULT_STEP_DELAY_MS: DelayRange = DelayRange { min: 300, max: 600 };
 
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Action {
+    #[serde(flatten)]
+    pub kind: ActionKind,
+    #[serde(default)]
+    pub sound: SoundSettings,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum Action {
+pub enum ActionKind {
     KeySequence(KeySequenceAction),
 }
 
-impl Default for Action {
+impl Default for ActionKind {
     fn default() -> Self {
-        Action::KeySequence(KeySequenceAction::default())
+        Self::KeySequence(KeySequenceAction::default())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SoundSettings {
+    pub id: Option<String>,
+    pub volume_percent: u8,
+}
+
+impl Default for SoundSettings {
+    fn default() -> Self {
+        Self { id: None, volume_percent: 50 }
+    }
+}
+
+impl SoundSettings {
+    pub fn validate(&self) -> AppResult<()> {
+        if self.volume_percent > 100 {
+            return Err(AppError::Validation("Громкость должна быть от 0 до 100%".into()));
+        }
+        if let Some(id) = &self.id {
+            if !crate::action_sound::is_known_id(id) {
+                return Err(AppError::Validation(format!("Звук {id} не поддерживается")));
+            }
+        }
+        Ok(())
     }
 }
 
 impl Action {
+    #[cfg(test)]
+    pub fn key_sequence(sequence: KeySequenceAction) -> Self {
+        Self { kind: ActionKind::KeySequence(sequence), sound: SoundSettings::default() }
+    }
     pub fn normalize(&mut self) {
-        match self {
-            Action::KeySequence(action) => action.normalize(),
+        match &mut self.kind {
+            ActionKind::KeySequence(action) => action.normalize(),
         }
     }
-
     pub fn validate(&self) -> AppResult<()> {
-        match self {
-            Action::KeySequence(action) => action.validate(),
+        self.sound.validate()?;
+        match &self.kind {
+            ActionKind::KeySequence(action) => action.validate(),
         }
     }
-
     pub fn is_empty(&self) -> bool {
-        match self {
-            Action::KeySequence(action) => action.steps.is_empty(),
+        match &self.kind {
+            ActionKind::KeySequence(action) => action.steps.is_empty(),
         }
     }
 }
@@ -114,6 +152,36 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[test]
+    fn defaults_missing_and_partial_sound_settings() {
+        for (sound, expected) in [
+            (None, SoundSettings::default()),
+            (Some(json!({})), SoundSettings::default()),
+            (Some(json!({ "id": "soft-ping" })), SoundSettings { id: Some("soft-ping".into()), volume_percent: 50 }),
+            (Some(json!({ "volumePercent": 20 })), SoundSettings { id: None, volume_percent: 20 }),
+        ] {
+            let mut value = json!({ "type": "keySequence", "steps": [] });
+            if let Some(sound) = sound { value["sound"] = sound; }
+            let action: Action = serde_json::from_value(value).unwrap();
+            assert_eq!(action.sound, expected);
+            assert!(action.is_empty());
+        }
+    }
+
+    #[test]
+    fn validates_sound_id_and_volume_boundaries() {
+        for volume_percent in [0, 100] {
+            assert!(SoundSettings { id: Some("soft-ping".into()), volume_percent }.validate().is_ok());
+        }
+        assert!(SoundSettings { id: Some("unknown-sound".into()), volume_percent: 50 }.validate().is_err());
+        assert!(SoundSettings { id: None, volume_percent: 101 }.validate().is_err());
+        for volume in [json!(-1), json!(50.5), json!(256)] {
+            assert!(serde_json::from_value::<Action>(json!({
+                "type": "keySequence", "steps": [], "sound": { "volumePercent": volume }
+            })).is_err());
+        }
+    }
+
     fn step(key: &str, modifiers: Vec<Modifier>, delay: Option<DelayRange>) -> KeyStep {
         KeyStep {
             id: Uuid::new_v4(),
@@ -133,7 +201,7 @@ mod tests {
     fn serializes_tagged_by_type() {
         let first = step("KeyQ", vec![], None);
         let second = step("Digit1", vec![Modifier::Ctrl], Some(DelayRange { min: 300, max: 600 }));
-        let action = Action::KeySequence(sequence(vec![first.clone(), second.clone()]));
+        let action = Action::key_sequence(sequence(vec![first.clone(), second.clone()]));
 
         let value = serde_json::to_value(&action).unwrap();
 
@@ -141,6 +209,7 @@ mod tests {
             value,
             json!({
                 "type": "keySequence",
+                "sound": { "id": null, "volumePercent": 50 },
                 "steps": [
                     { "id": first.id, "delayBeforeMs": null, "combo": { "modifiers": [], "key": "KeyQ" } },
                     {

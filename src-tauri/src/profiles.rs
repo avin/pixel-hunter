@@ -287,7 +287,7 @@ fn find_tracker(config: &mut Config, profile_id: Uuid, tracker_id: Uuid) -> AppR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{KeyCombo, KeySequenceAction, KeyStep};
+    use crate::action::{ActionKind, KeyCombo, KeySequenceAction, KeyStep};
     use crate::config::Rgb;
     use std::fs;
     use tempfile::TempDir;
@@ -506,7 +506,7 @@ mod tests {
     }
 
     fn key_sequence(steps: &[(&str, Option<DelayRange>)]) -> Action {
-        Action::KeySequence(KeySequenceAction {
+        Action::key_sequence(KeySequenceAction {
             steps: steps
                 .iter()
                 .map(|(key, delay)| KeyStep {
@@ -546,10 +546,49 @@ mod tests {
         )
         .unwrap();
 
-        let Action::KeySequence(sequence) = &saved;
+        let ActionKind::KeySequence(sequence) = &saved.kind;
         assert_eq!(sequence.steps[0].delay_before_ms, None);
         assert_eq!(sequence.steps[1].delay_before_ms, delay);
         assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
+    }
+
+    #[test]
+    fn persists_sound_per_tracker_without_changing_steps_or_run_state() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (first, _) = complete_tracker(&fixture, profile.id);
+        let (second, _) = complete_tracker(&fixture, profile.id);
+        set_tracker_running(&fixture.store, profile.id, first.id, true).unwrap();
+        let second_action = get_action(&fixture.store, profile.id, second.id).unwrap();
+        let mut action = get_action(&fixture.store, profile.id, first.id).unwrap();
+        let steps = action.kind.clone();
+        action.sound = crate::action::SoundSettings { id: Some("arcade-coin".into()), volume_percent: 35 };
+        update_action(&fixture.store, profile.id, first.id, action.clone()).unwrap();
+        let reloaded = fixture.reloaded();
+        assert_eq!(reloaded[0].trackers[0].action, action);
+        assert_eq!(reloaded[0].trackers[0].action.kind, steps);
+        assert!(reloaded[0].trackers[0].is_running);
+        assert_eq!(reloaded[0].trackers[1].action, second_action);
+    }
+
+    #[test]
+    fn invalid_sound_update_keeps_memory_and_disk_unchanged() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, _) = complete_tracker(&fixture, profile.id);
+        let saved = get_action(&fixture.store, profile.id, tracker.id).unwrap();
+        let bytes = fs::read(fixture.dir.path().join("config.json")).unwrap();
+        for sound in [
+            crate::action::SoundSettings { id: Some("unknown-sound".into()), volume_percent: 50 },
+            crate::action::SoundSettings { id: Some("soft-ping".into()), volume_percent: 101 },
+        ] {
+            let mut action = saved.clone();
+            action.sound = sound;
+            assert_validation_error(update_action(&fixture.store, profile.id, tracker.id, action));
+            assert_eq!(get_action(&fixture.store, profile.id, tracker.id).unwrap(), saved);
+            assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
+            assert_eq!(fs::read(fixture.dir.path().join("config.json")).unwrap(), bytes);
+        }
     }
 
     #[test]

@@ -51,7 +51,20 @@ export interface KeyStep {
   combo: KeyCombo;
 }
 
-export type Action = { type: "keySequence"; steps: KeyStep[] };
+/** Stable ID from the backend sound catalog. */
+export type SoundId = string;
+
+export interface SoundSettings {
+  id: SoundId | null;
+  volumePercent: number;
+}
+
+export interface ActionSoundInfo {
+  id: SoundId;
+  name: string;
+}
+
+export type Action = { type: "keySequence"; steps: KeyStep[]; sound: SoundSettings };
 
 export type ActionType = Action["type"];
 

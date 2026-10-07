@@ -146,6 +146,35 @@ mod tests {
     }
 
     #[test]
+    fn loads_version_one_actions_without_sound_preserving_steps_and_run_state() {
+        use crate::action::{Action, KeyCombo, KeySequenceAction, KeyStep, SoundSettings};
+        use crate::config::{Pixel, Rgb, Tracker};
+        use uuid::Uuid;
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = Tracker::new("Health".into());
+        tracker.pixels.push(Pixel::new(Uuid::new_v4(), 1, 2, Rgb { r: 1, g: 2, b: 3 }));
+        tracker.action = Action::key_sequence(KeySequenceAction { steps: vec![KeyStep {
+            id: Uuid::new_v4(), delay_before_ms: None,
+            combo: KeyCombo { modifiers: vec![], key: "KeyQ".into() },
+        }] });
+        tracker.is_running = true;
+        let mut profile = Profile::new("Game".into(), "game.exe".into());
+        profile.trackers.push(tracker.clone());
+        let mut config = Config::default();
+        config.profiles.push(profile);
+        let mut json = serde_json::to_value(&config).unwrap();
+        json["profiles"][0]["trackers"][0]["action"].as_object_mut().unwrap().remove("sound");
+        fs::write(dir.path().join(CONFIG_FILE), serde_json::to_vec(&json).unwrap()).unwrap();
+        let loaded = ConfigStore::load(dir.path()).unwrap();
+        assert!(loaded.corrupt_backup.is_none());
+        let restored = loaded.store.read(|config| config.profiles[0].trackers[0].clone());
+        assert_eq!(restored, tracker);
+        assert_eq!(restored.action.sound, SoundSettings::default());
+        loaded.store.update(|_| Ok(())).unwrap();
+        assert_eq!(ConfigStore::load(dir.path()).unwrap().store.read(Clone::clone), config);
+    }
+
+    #[test]
     fn moves_corrupt_file_aside_and_starts_empty() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(CONFIG_FILE), "{ not json").unwrap();

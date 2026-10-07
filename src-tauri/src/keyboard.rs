@@ -8,7 +8,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, VIRTUAL_KEY,
 };
 
-use crate::action::Action;
+use crate::action::{Action, ActionKind};
 use crate::error::AppResult;
 use crate::key_sequence::{self, InputSink, KeyEvent, Sleeper};
 
@@ -69,8 +69,8 @@ impl Drop for TimerResolution {
 /// Blocks the calling thread until the whole action has been played.
 pub fn run_action(action: &Action) -> AppResult<()> {
     let _resolution = TimerResolution::begin();
-    match action {
-        Action::KeySequence(sequence) => key_sequence::execute_key_sequence(
+    match &action.kind {
+        ActionKind::KeySequence(sequence) => key_sequence::execute_key_sequence(
             sequence,
             &mut SendInputSink,
             &ThreadSleeper,

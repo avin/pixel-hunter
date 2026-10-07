@@ -14,7 +14,7 @@ async function openTracker(steps: KeyStep[] = []) {
     createFakeBackend({
       profiles: [
         profileFixture({
-          trackers: [trackerFixture({ action: { type: "keySequence", steps } })],
+          trackers: [trackerFixture({ action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps } })],
         }),
       ],
     }),

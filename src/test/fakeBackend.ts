@@ -1,6 +1,7 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   Action,
+  ActionSoundInfo,
   KeyCodeInfo,
   KeyStep,
   Pixel,
@@ -22,6 +23,22 @@ interface Options {
 type Args = Record<string, unknown>;
 
 export const SCREENSHOTS_DIR = "C:\\data\\screenshots";
+
+/** Mirrors the Rust command fixture; production UI always reads its catalog. */
+export const ACTION_SOUNDS: ActionSoundInfo[] = [
+  ["soft-ping", "Soft Ping"], ["bright-bell", "Bright Bell"], ["crystal-drop", "Crystal Drop"],
+  ["gentle-chime", "Gentle Chime"], ["double-tap", "Double Tap"], ["triple-beep", "Triple Beep"],
+  ["rising-spark", "Rising Spark"], ["falling-star", "Falling Star"], ["digital-pop", "Digital Pop"],
+  ["wooden-click", "Wooden Click"], ["bubble-pop", "Bubble Pop"], ["glass-tick", "Glass Tick"],
+  ["marimba-note", "Marimba Note"], ["low-pulse", "Low Pulse"], ["radar-blip", "Radar Blip"],
+  ["echo-pluck", "Echo Pluck"], ["tiny-gong", "Tiny Gong"], ["arcade-coin", "Arcade Coin"],
+  ["success-chord", "Success Chord"], ["alert-chirp", "Alert Chirp"],
+].map(([id, name]) => ({ id, name }));
+
+function validateSound(id: unknown, volumePercent: unknown) {
+  if (id !== null && !ACTION_SOUNDS.some((sound) => sound.id === id)) throw new Error("Unknown sound");
+  if (!Number.isInteger(volumePercent) || Number(volumePercent) < 0 || Number(volumePercent) > 100) throw new Error("Invalid volume");
+}
 
 /** A subset of the Rust key table. */
 export const KEY_CODES: KeyCodeInfo[] = [
@@ -115,7 +132,7 @@ export function createFakeBackend({ profiles = [], processes = [], viewerRequest
           preActionDelayMs: { min: 100, max: 300 },
           resumeDelayMs: 1000,
           pixels: [],
-          action: { type: "keySequence", steps: [] },
+          action: { type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } },
           isRunning: false,
         };
         findProfile(args.profileId).trackers.push(tracker);
@@ -137,6 +154,7 @@ export function createFakeBackend({ profiles = [], processes = [], viewerRequest
       case "action_update": {
         const tracker = findTracker(args.profileId, args.trackerId);
         const action = structuredClone(args.action as Action);
+        validateSound(action.sound.id, action.sound.volumePercent);
         if (action.steps[0]) action.steps[0].delayBeforeMs = null;
         tracker.action = action;
         stopIfIncomplete(tracker);
@@ -156,6 +174,14 @@ export function createFakeBackend({ profiles = [], processes = [], viewerRequest
         return null;
       case "key_codes_list":
         return structuredClone(KEY_CODES);
+      case "action_sounds_list":
+        return structuredClone(ACTION_SOUNDS);
+      case "action_sound_preview":
+        if (args.id === null) throw new Error("Unknown sound");
+        validateSound(args.id, args.volumePercent);
+        return null;
+      case "action_sound_stop_preview":
+        return null;
       case "pixel_update": {
         const pixel = findPixel(args);
         Object.assign(pixel, args.input as PixelInput);
@@ -261,7 +287,7 @@ export function trackerFixture(overrides: Partial<Tracker> = {}): Tracker {
     preActionDelayMs: { min: 100, max: 300 },
     resumeDelayMs: 1000,
     pixels: [],
-    action: { type: "keySequence", steps: [] },
+    action: { type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } },
     isRunning: false,
     ...overrides,
   };

@@ -2,6 +2,7 @@ use tauri::{AppHandle, Manager, State};
 use uuid::Uuid;
 
 use crate::action::Action;
+use crate::action_sound::{self, AudioService, SoundInfo};
 use crate::config::{Pixel, Profile, Tracker};
 use crate::config_store::ConfigStore;
 use crate::engine::Engine;
@@ -107,6 +108,31 @@ pub fn action_update(
 #[tauri::command]
 pub fn key_codes_list() -> Vec<KeyCodeInfo> {
     key_codes::list()
+}
+
+#[tauri::command]
+pub fn action_sounds_list() -> Vec<SoundInfo> {
+    action_sound::catalog().to_vec()
+}
+
+#[tauri::command]
+pub async fn action_sound_preview(
+    audio: State<'_, AudioService>,
+    id: String,
+    volume_percent: u8,
+) -> AppResult<()> {
+    let audio = audio.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || audio.preview(&id, volume_percent))
+        .await
+        .map_err(|error| crate::error::AppError::Audio(error.to_string()))?
+}
+
+#[tauri::command]
+pub async fn action_sound_stop_preview(audio: State<'_, AudioService>) -> AppResult<()> {
+    let audio = audio.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || audio.stop_preview())
+        .await
+        .map_err(|error| crate::error::AppError::Audio(error.to_string()))?
 }
 
 /// Plays the tracker's action 3 seconds later, leaving time to switch to the target window.

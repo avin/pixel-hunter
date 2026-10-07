@@ -1,4 +1,5 @@
 mod action;
+mod action_sound;
 mod commands;
 mod config;
 mod config_store;
@@ -47,7 +48,9 @@ pub fn run() {
                 warn_about_corrupt_config(&backup);
             }
             let emitter = app.handle().clone();
-            app.manage(Engine::start(move |status| {
+            let audio = action_sound::AudioService::start();
+            app.manage(audio.clone());
+            app.manage(Engine::start_with_audio(audio, move |status| {
                 let _ = emitter.emit(engine::STATUS_EVENT, status);
             }));
             let handle = app.handle().clone();
@@ -74,6 +77,9 @@ pub fn run() {
             commands::engine_deactivate,
             commands::action_update,
             commands::key_codes_list,
+            commands::action_sounds_list,
+            commands::action_sound_preview,
+            commands::action_sound_stop_preview,
             #[cfg(debug_assertions)]
             commands::debug_run_action,
             commands::pixel_update,
@@ -89,8 +95,13 @@ pub fn run() {
             commands::screenshots_dir,
             commands::windowed_processes_list,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<action_sound::AudioService>().shutdown();
+            }
+        });
 }
 
 fn warn_about_corrupt_config(backup: &Path) {

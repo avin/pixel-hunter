@@ -8,6 +8,7 @@ export interface ActionEditorProps<T extends ActionType> {
   profileId: string;
   trackerId: string;
   action: ActionOf<T>;
+  onChange: (action: ActionOf<T>) => void;
 }
 
 interface ActionTypeDefinition<T extends ActionType> {
@@ -20,7 +21,7 @@ interface ActionTypeDefinition<T extends ActionType> {
 export const actionTypes: { [T in ActionType]: ActionTypeDefinition<T> } = {
   keySequence: {
     label: "Нажатие клавиш",
-    createDefault: () => ({ type: "keySequence", steps: [] }),
+    createDefault: () => ({ type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } }),
     Editor: KeySequenceEditor,
   },
 };
