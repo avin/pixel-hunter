@@ -189,13 +189,29 @@ pub fn pixel_capture_pick(capture: State<'_, PixelCapture>, x: u32, y: u32) -> A
 #[tauri::command]
 pub async fn pixel_view_open(
     app: AppHandle,
+    window: tauri::WebviewWindow,
     store: State<'_, ConfigStore>,
     profile_id: Uuid,
     tracker_id: Uuid,
     pixel_id: Uuid,
+    origin: Option<crate::screenshot_viewer::ViewOrigin>,
 ) -> AppResult<()> {
     let pixel = profiles::get_pixel(&store, profile_id, tracker_id, pixel_id)?;
-    crate::screenshot_viewer::open_viewer(&app, profile_id, pixel.id, pixel.x, pixel.y)
+    let origin = origin
+        .map(|point| {
+            let position = window
+                .inner_position()
+                .map_err(|error| crate::error::AppError::Capture(error.to_string()))?;
+            let scale = window
+                .scale_factor()
+                .map_err(|error| crate::error::AppError::Capture(error.to_string()))?;
+            Ok::<_, crate::error::AppError>(tauri::PhysicalPosition::new(
+                f64::from(position.x) + point.x * scale,
+                f64::from(position.y) + point.y * scale,
+            ))
+        })
+        .transpose()?;
+    crate::screenshot_viewer::open_viewer(&app, profile_id, pixel.id, pixel.x, pixel.y, origin)
 }
 
 #[tauri::command]

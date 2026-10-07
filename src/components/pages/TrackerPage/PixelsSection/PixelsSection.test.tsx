@@ -182,12 +182,14 @@ describe("Pixel table on TrackerPage", () => {
   it("opens the screenshot viewer from the thumbnail", async () => {
     const { user, backend } = await openTracker([pixelFixture()]);
 
-    await user.click(
-      screen.getByRole("button", { name: "Открыть снимок пикселя (812, 1040)" }),
-    );
+    await user.pointer({
+      keys: "[MouseLeft]",
+      target: screen.getByRole("button", { name: "Открыть снимок пикселя (812, 1040)" }),
+      coords: { clientX: 168, clientY: 320 },
+    });
 
     expect(backend.callsOf("pixel_view_open")).toEqual([
-      { profileId: "profile-1", trackerId: "tracker-1", pixelId: "pixel-1" },
+      { profileId: "profile-1", trackerId: "tracker-1", pixelId: "pixel-1", origin: { x: 168, y: 320 } },
     ]);
   });
 

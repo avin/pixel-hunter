@@ -84,7 +84,13 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
             type="button"
             aria-label={`Открыть снимок пикселя ${point}`}
             className="block outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-            onClick={() => void openViewer(pixelArgs)}
+            onClick={(event) => {
+              const bounds = event.currentTarget.getBoundingClientRect();
+              const origin = event.detail === 0
+                ? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 }
+                : { x: event.clientX, y: event.clientY };
+              void openViewer({ ...pixelArgs, origin });
+            }}
           >
             <img
               src={screenshotSrc(screenshotsDir, profileId, pixel.id, "thumbnail")}

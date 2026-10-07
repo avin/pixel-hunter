@@ -107,4 +107,6 @@ export interface ScreenshotViewRequest {
   pixelId: string;
   x: number;
   y: number;
+  /** Opening point in the viewer's logical viewport coordinates. */
+  origin?: { x: number; y: number } | null;
 }

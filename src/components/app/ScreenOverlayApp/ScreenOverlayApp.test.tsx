@@ -135,6 +135,31 @@ describe("ScreenOverlayApp viewer", () => {
     await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toEqual([{ sequence: 1 }, { sequence: 2 }]));
   });
 
+  it("waits for the cleared frame before hiding the reusable window", async () => {
+    const { user, backend } = renderOverlay(search);
+    await loadScreenshot(1920, 1080);
+    await waitFor(() => expect(backend.state.viewerVisible).toBe(true));
+    await act(async () => {
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+    });
+    const frames: FrameRequestCallback[] = [];
+    const frame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      await user.keyboard("{Escape}");
+      expect(backend.callsOf("screenshot_view_close")).toHaveLength(0);
+      await act(async () => { frames.shift()?.(0); });
+      expect(backend.callsOf("screenshot_view_close")).toHaveLength(0);
+      await act(async () => { frames.shift()?.(16); });
+      await waitFor(() => expect(backend.state.viewerVisible).toBe(false));
+      expect(backend.callsOf("screenshot_view_close")).toEqual([{ sequence: 1 }]);
+    } finally {
+      frame.mockRestore();
+    }
+  });
+
   it("does not show an old image that finishes decoding after a new request", async () => {
     const { backend } = renderOverlay(search);
     const image = await screen.findByRole("img", { name: "Снимок экрана" });

@@ -1,5 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
-import { useEffect, useRef, useState } from "react";
+import { cn } from "cn";
+import { type CSSProperties, useEffect, useRef, useState } from "react";
 import {
   useLazyScreenshotViewRequestQuery,
   useScreenshotViewCloseMutation,
@@ -13,6 +14,13 @@ import { Screenshot } from "../Screenshot/Screenshot";
 const RING_RADIUS = 16;
 const RING_WIDTH = 3;
 const CROSS_REACH = 24;
+
+/** The second callback runs after the browser has painted the preceding frame. */
+function waitForPaint() {
+  return new Promise<void>((resolve) => {
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => resolve()));
+  });
+}
 
 export function ScreenshotViewer() {
   const [request, setRequest] = useState<ScreenshotViewRequest>();
@@ -43,17 +51,21 @@ export function ScreenshotViewer() {
 interface Props { request: ScreenshotViewRequest }
 
 function ScreenshotPreview({ request }: Props) {
+  const [isShown, setIsShown] = useState(false);
   const [show] = useScreenshotViewReadyMutation();
   const [hide] = useScreenshotViewCloseMutation();
   const [fail] = useScreenshotViewFailedMutation();
   const isClosing = useRef(false);
 
   useEffect(() => {
-    const close = (event: Event) => {
+    const close = async (event: Event) => {
       event.preventDefault();
       event.stopPropagation();
       if (isClosing.current) return;
       isClosing.current = true;
+      // Clear the retained WebView surface before hiding this reusable window.
+      setIsShown(false);
+      await waitForPaint();
       void hide({ sequence: request.sequence });
     };
     window.addEventListener("pointerdown", close, true);
@@ -69,22 +81,38 @@ function ScreenshotPreview({ request }: Props) {
       role="dialog"
       aria-label="Просмотр снимка. Любой клик или клавиша — закрыть"
       aria-modal="true"
-      className="fixed inset-0 flex items-center justify-center overflow-hidden bg-black"
+      className="fixed inset-0 flex items-center justify-center overflow-hidden"
     >
-      <Screenshot
-        profileId={request.profileId}
-        pixelId={request.pixelId}
-        isFitted
-        onReady={() => {
-          if (!isClosing.current) void show({ sequence: request.sequence });
-        }}
-        onError={() => {
-          isClosing.current = true;
-          void fail({ sequence: request.sequence });
-        }}
+      <div
+        className={cn("origin-center shadow-screenshot", isShown && "animate-screenshot-open")}
+        style={{
+          opacity: 0,
+          ...(request.origin && {
+            "--screenshot-origin-x": `calc(${request.origin.x}px - 50vw)`,
+            "--screenshot-origin-y": `calc(${request.origin.y}px - 50vh)`,
+          }),
+        } as CSSProperties}
       >
-        {(size) => <PixelMarker pixel={{ x: request.x, y: request.y }} size={size} />}
-      </Screenshot>
+        <Screenshot
+          profileId={request.profileId}
+          pixelId={request.pixelId}
+          isFitted
+          onReady={async () => {
+            if (isClosing.current) return;
+            const result = await show({ sequence: request.sequence });
+            if ("error" in result || isClosing.current) return;
+            // Hidden WebViews can suspend frames; wait only after the window is visible.
+            await waitForPaint();
+            if (!isClosing.current) setIsShown(true);
+          }}
+          onError={() => {
+            isClosing.current = true;
+            void fail({ sequence: request.sequence });
+          }}
+        >
+          {(size) => <PixelMarker pixel={{ x: request.x, y: request.y }} size={size} />}
+        </Screenshot>
+      </div>
     </div>
   );
 }

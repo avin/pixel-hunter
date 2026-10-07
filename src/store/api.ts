@@ -162,10 +162,10 @@ export const tauriApi = createApi({
     pixelCapturePick: builder.mutation<void, { x: number; y: number }>({
       query: ({ x, y }) => ({ command: "pixel_capture_pick", args: { x, y } }),
     }),
-    pixelViewOpen: builder.mutation<void, PixelArgs>({
-      query: ({ profileId, trackerId, pixelId }) => ({
+    pixelViewOpen: builder.mutation<void, PixelArgs & { origin: { x: number; y: number } }>({
+      query: ({ profileId, trackerId, pixelId, origin }) => ({
         command: "pixel_view_open",
-        args: { profileId, trackerId, pixelId },
+        args: { profileId, trackerId, pixelId, origin },
       }),
     }),
     screenshotViewRequest: builder.query<ScreenshotViewRequest | null, void>({

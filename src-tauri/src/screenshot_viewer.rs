@@ -2,7 +2,7 @@
 
 use std::sync::Mutex;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{
     window::Color, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State, WebviewUrl,
     WebviewWindow, WebviewWindowBuilder, WindowEvent,
@@ -17,6 +17,12 @@ const LABEL: &str = "screenshot-viewer";
 const OPEN_EVENT: &str = "screenshot-viewer://open";
 const ERROR_EVENT: &str = "screenshot-viewer://error";
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ViewOrigin {
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ViewRequest {
@@ -25,6 +31,7 @@ pub struct ViewRequest {
     pixel_id: Uuid,
     x: u32,
     y: u32,
+    origin: Option<ViewOrigin>,
 }
 
 #[derive(Default)]
@@ -35,7 +42,14 @@ struct Requests {
 }
 
 impl Requests {
-    fn open(&mut self, profile_id: Uuid, pixel_id: Uuid, x: u32, y: u32) -> ViewRequest {
+    fn open(
+        &mut self,
+        profile_id: Uuid,
+        pixel_id: Uuid,
+        x: u32,
+        y: u32,
+        origin: Option<ViewOrigin>,
+    ) -> ViewRequest {
         self.sequence += 1;
         let request = ViewRequest {
             sequence: self.sequence,
@@ -43,6 +57,7 @@ impl Requests {
             pixel_id,
             x,
             y,
+            origin,
         };
         self.pending = Some(request.clone());
         self.prepared = false;
@@ -105,19 +120,28 @@ pub fn open_viewer(
     pixel_id: Uuid,
     x: u32,
     y: u32,
+    origin: Option<PhysicalPosition<f64>>,
 ) -> AppResult<()> {
     let viewer = app.state::<ScreenshotViewer>();
     let _opening = viewer.opening.lock().unwrap();
+    let monitor = match origin.as_ref() {
+        Some(point) => app
+            .monitor_from_point(point.x, point.y)
+            .map_err(window_error)?,
+        None => None,
+    }
+    .or(app.primary_monitor().map_err(window_error)?)
+    .ok_or_else(|| AppError::Capture("Монитор не найден".into()))?;
+    let origin = origin.map(|point| ViewOrigin {
+        x: (point.x - f64::from(monitor.position().x)) / monitor.scale_factor(),
+        y: (point.y - f64::from(monitor.position().y)) / monitor.scale_factor(),
+    });
     let request = viewer
         .requests
         .lock()
         .unwrap()
-        .open(profile_id, pixel_id, x, y);
+        .open(profile_id, pixel_id, x, y, origin);
     let result = (|| {
-        let monitor = app
-            .primary_monitor()
-            .map_err(window_error)?
-            .ok_or_else(|| AppError::Capture("Основной монитор не найден".into()))?;
         let window = match app.get_webview_window(LABEL) {
             Some(window) => {
                 window.hide().map_err(window_error)?;
@@ -135,7 +159,8 @@ pub fn open_viewer(
             .resizable(false)
             .closable(false)
             .shadow(false)
-            .background_color(Color(0, 0, 0, 255))
+            .transparent(true)
+            .background_color(Color(0, 0, 0, 0))
             .visible(false)
             .build()
             .map_err(window_error)?,
@@ -239,9 +264,15 @@ mod tests {
     fn only_the_latest_request_can_reveal_or_close_the_viewer() {
         let mut requests = Requests::default();
         let profile = Uuid::new_v4();
-        let first = requests.open(profile, Uuid::new_v4(), 1, 2);
+        let first = requests.open(profile, Uuid::new_v4(), 1, 2, None);
         requests.prepare(first.sequence);
-        let second = requests.open(profile, Uuid::new_v4(), 3, 4);
+        let second = requests.open(
+            profile,
+            Uuid::new_v4(),
+            3,
+            4,
+            Some(ViewOrigin { x: 120.0, y: 240.0 }),
+        );
         requests.prepare(second.sequence);
         assert!(second.sequence > first.sequence);
         assert!(!requests.matches(first.sequence));
@@ -251,6 +282,10 @@ mod tests {
         assert!(requests.can_reveal(second.sequence));
         let pending = requests.pending.as_ref().unwrap();
         assert_eq!(
+            pending.origin.as_ref().map(|point| (point.x, point.y)),
+            Some((120.0, 240.0))
+        );
+        assert_eq!(
             (pending.profile_id, pending.pixel_id, pending.x, pending.y),
             (profile, second.pixel_id, 3, 4)
         );
@@ -259,14 +294,14 @@ mod tests {
     #[test]
     fn closed_request_cannot_reveal_the_window_again() {
         let mut requests = Requests::default();
-        let request = requests.open(Uuid::new_v4(), Uuid::new_v4(), 1, 2);
+        let request = requests.open(Uuid::new_v4(), Uuid::new_v4(), 1, 2, None);
         requests.prepare(request.sequence);
         assert!(requests.invalidate(request.sequence));
         assert!(!requests.matches(request.sequence));
         assert!(!requests.can_reveal(request.sequence));
         assert!(!requests.invalidate(request.sequence));
         assert!(requests.pending.is_none());
-        let reopened = requests.open(request.profile_id, request.pixel_id, 1, 2);
+        let reopened = requests.open(request.profile_id, request.pixel_id, 1, 2, None);
         assert!(reopened.sequence > request.sequence);
         assert!(!requests.invalidate(request.sequence));
         assert!(requests.matches(reopened.sequence));
@@ -275,7 +310,7 @@ mod tests {
     #[test]
     fn startup_request_is_available_only_after_window_geometry_is_prepared() {
         let mut requests = Requests::default();
-        let request = requests.open(Uuid::new_v4(), Uuid::new_v4(), 1, 2);
+        let request = requests.open(Uuid::new_v4(), Uuid::new_v4(), 1, 2, None);
         assert!(requests.request().is_none());
         assert!(!requests.can_reveal(request.sequence));
         requests.prepare(request.sequence);
