@@ -91,7 +91,7 @@ describe("KeySequenceEditor", () => {
     ]);
   });
 
-  it("adds a later step with a 300–600 ms delay", async () => {
+  it("adds a later step with a 100–200 ms delay", async () => {
     const { user, backend } = await openTracker([q]);
 
     await user.click(addButton());
@@ -99,10 +99,10 @@ describe("KeySequenceEditor", () => {
 
     await waitFor(() => expect(stepItems()).toHaveLength(2));
     expect(stepItems()[1]).toHaveTextContent("W");
-    expect(delayInput(2, "минимум")).toHaveValue(300);
-    expect(delayInput(2, "максимум")).toHaveValue(600);
+    expect(delayInput(2, "минимум")).toHaveValue(100);
+    expect(delayInput(2, "максимум")).toHaveValue(200);
     expect(savedSteps(backend)[1]).toMatchObject({
-      delayBeforeMs: { min: 300, max: 600 },
+      delayBeforeMs: { min: 100, max: 200 },
       combo: { modifiers: [], key: "KeyW" },
     });
   });

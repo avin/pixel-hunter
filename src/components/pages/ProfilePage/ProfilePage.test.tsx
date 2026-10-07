@@ -159,21 +159,23 @@ describe("ProfilePage", () => {
       action: { type: "keySequence", steps: [keyStepFixture()] },
     });
     const runToggle = (name = "Здоровье") =>
-      screen.getByRole("button", { name: `Запуск отслеживания «${name}»` });
+      screen.getByRole("button", { name: new RegExp(`^(Старт|Стоп) отслеживания «${name}»$`) });
 
     it("starts and stops a tracker", async () => {
       const { user, backend } = await openProfile(
         profileFixture({ trackers: [complete] }),
       );
       expect(runToggle()).toHaveAttribute("aria-pressed", "false");
-      expect(screen.getByText("Остановлено")).toBeInTheDocument();
+      expect(runToggle()).toHaveTextContent("Старт");
+      expect(screen.queryByText("Остановлено")).not.toBeInTheDocument();
 
       await user.click(runToggle());
 
       await waitFor(() =>
         expect(runToggle()).toHaveAttribute("aria-pressed", "true"),
       );
-      expect(screen.getByText("Запущено")).toBeInTheDocument();
+      expect(runToggle()).toHaveTextContent("Стоп");
+      expect(screen.queryByText("Запущено")).not.toBeInTheDocument();
       expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
 
       await user.click(runToggle());
@@ -182,6 +184,7 @@ describe("ProfilePage", () => {
         expect(runToggle()).toHaveAttribute("aria-pressed", "false"),
       );
       expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false);
+      expect(runToggle()).toHaveTextContent("Старт");
     });
 
     it("cannot start a tracker without pixels", async () => {

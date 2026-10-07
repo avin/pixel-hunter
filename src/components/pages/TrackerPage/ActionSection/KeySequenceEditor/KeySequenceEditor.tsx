@@ -18,7 +18,7 @@ import { StepRow } from "./StepRow/StepRow";
 
 type Props = ActionEditorProps<"keySequence">;
 
-const DEFAULT_STEP_DELAY_MS = { min: 300, max: 600 };
+const DEFAULT_STEP_DELAY_MS = { min: 100, max: 200 };
 
 export function KeySequenceEditor({ profileId, trackerId, action }: Props) {
   const keyCodes = useKeyCodesListQuery();
@@ -114,7 +114,7 @@ export function KeySequenceEditor({ profileId, trackerId, action }: Props) {
         </p>
       )}
 
-      <div className="shrink-0 border-t px-3 py-2">
+      <div className="shrink-0 border-t pt-2">
         <KeyRecorder
           variant="outline"
           size="sm"

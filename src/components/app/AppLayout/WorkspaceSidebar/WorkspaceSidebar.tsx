@@ -112,7 +112,7 @@ export function WorkspaceSidebar({ profileId, trackerId, isLeaving }: Props) {
                     <div key={tracker.id} className="flex min-w-0 items-center">
                       <Link
                         to={trackerPath(profile.id, tracker.id)}
-                        title={tracker.name}
+                        title={`${tracker.name} (${tracker.isRunning ? "запущено" : "остановлено"})`}
                         aria-label={`Открыть отслеживание «${tracker.name}»`}
                         aria-current={
                           profile.id === profileId && tracker.id === trackerId
@@ -131,7 +131,7 @@ export function WorkspaceSidebar({ profileId, trackerId, isLeaving }: Props) {
                         <span className="truncate">{tracker.name}</span>
                         {tracker.isRunning && (
                           <span
-                            className="ml-auto shrink-0 text-primary"
+                            className="ml-auto shrink-0 text-success"
                             aria-label="Запущено"
                           >
                             ●

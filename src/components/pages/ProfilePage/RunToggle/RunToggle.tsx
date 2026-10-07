@@ -24,7 +24,7 @@ export function RunToggle({ profileId, tracker }: Props) {
   return (
     <div className="flex items-center gap-2">
       <Button
-        variant={isRunning ? "default" : "outline"}
+        variant={isRunning ? "destructive" : "outline"}
         size="sm"
         aria-pressed={isRunning}
         aria-describedby={hint ? hintId : undefined}
@@ -34,15 +34,11 @@ export function RunToggle({ profileId, tracker }: Props) {
         }
       >
         {isRunning ? <Square /> : <Play />}
-        Запуск <span className="sr-only">отслеживания «{tracker.name}»</span>
+        {isRunning ? "Стоп" : "Старт"} <span className="sr-only">отслеживания «{tracker.name}»</span>
       </Button>
-      {hint ? (
+      {hint && (
         <span id={hintId} className="text-xs text-muted-foreground">
           {hint}
-        </span>
-      ) : (
-        <span className="text-xs text-muted-foreground">
-          {isRunning ? "Запущено" : "Остановлено"}
         </span>
       )}
     </div>

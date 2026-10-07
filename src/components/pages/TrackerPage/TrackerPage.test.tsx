@@ -48,6 +48,35 @@ async function advance(ms: number) {
 }
 
 describe("TrackerPage", () => {
+  it("shows timing descriptions only after activating an info button", async () => {
+    const { user } = await openTracker();
+    const delayDescription = "Перед действием выдерживается случайная пауза из этого диапазона.";
+    const resumeDescription = "Сколько ждать после действия, прежде чем снова проверять пиксели.";
+
+    expect(screen.queryByText(delayDescription)).not.toBeInTheDocument();
+    expect(screen.queryByText(resumeDescription)).not.toBeInTheDocument();
+    const delayInfo = screen.getByRole("button", { name: "Информация: Задержка перед действием" });
+    await user.hover(delayInfo);
+    expect(screen.queryByText(delayDescription)).not.toBeInTheDocument();
+    await user.click(delayInfo);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(delayDescription);
+    await user.unhover(delayInfo);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(delayDescription);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+
+    await user.click(pauseInput());
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Информация: Пауза до возобновления опроса" })).toHaveFocus();
+    expect(screen.queryByText(resumeDescription)).not.toBeInTheDocument();
+    await user.keyboard("{Enter}");
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(resumeDescription);
+    await user.click(nameInput());
+    await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+    expect(minInput()).toBeInTheDocument();
+    expect(maxInput()).toBeInTheDocument();
+  });
+
   it("shows default timings of a new tracker", async () => {
     const { user } = renderApp(createFakeBackend({ profiles: [profileFixture()] }));
     await user.click(await screen.findByRole("link", { name: "Diablo" }));
@@ -383,7 +412,7 @@ describe("TrackerPage", () => {
     await user.click(screen.getByRole("button", { name: "Добавить нажатие" }));
     await user.keyboard("w");
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].action.steps).toHaveLength(2));
-    await user.click(screen.getByRole("button", { name: /^Запуск отслеживания/ }));
+    await user.click(screen.getByRole("button", { name: /^Старт отслеживания/ }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true));
     expect(nameInput()).toHaveValue("Здоровье новый");
     await user.click(exitLink());

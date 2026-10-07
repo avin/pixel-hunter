@@ -4,7 +4,6 @@ import { useBlocker } from "react-router-dom";
 import { useWorkspaceNavigation } from "@/components/app/AppLayout/workspaceNavigation";
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -15,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { delayRangeError, millisecondsError } from "@/lib/delayRange";
 import { useUpdateTrackerMutation } from "@/store/api";
 import type { Tracker } from "@/store/types";
+import { FieldInfo } from "./FieldInfo/FieldInfo";
 
 interface Props {
   profileId: string;
@@ -181,8 +181,8 @@ export function TrackerForm({ profileId, tracker }: Props) {
   return (
     <form noValidate onSubmit={(event) => event.preventDefault()} aria-label="Настройки отслеживания" className="shrink-0 border-b p-3">
       <fieldset disabled={isLeaving} className="min-w-0">
-      <FieldGroup className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] items-start gap-3">
-        <Field data-invalid={nameError ? true : undefined}>
+      <FieldGroup className="grid grid-cols-1 items-start gap-3 sm:grid-cols-3">
+        <Field className="gap-1" data-invalid={nameError ? true : undefined}>
           <FieldLabel htmlFor={ids.name}>Имя</FieldLabel>
           <Input
             id={ids.name}
@@ -195,14 +195,18 @@ export function TrackerForm({ profileId, tracker }: Props) {
           {nameError && <FieldError id={ids.nameError}>{nameError}</FieldError>}
         </Field>
 
-        <FieldSet>
-          <FieldLegend variant="label">Задержка перед действием, мс</FieldLegend>
-          <FieldDescription>
-            Перед действием выдерживается случайная пауза из этого диапазона.
-          </FieldDescription>
-          <div className="grid grid-cols-2 gap-2">
+        <FieldSet className="gap-1">
+          <FieldLegend variant="label" className="mb-1">
+            <span className="flex items-center gap-1">
+              Задержка перед действием, мс
+              <FieldInfo label="Задержка перед действием">
+                Перед действием выдерживается случайная пауза из этого диапазона.
+              </FieldInfo>
+            </span>
+          </FieldLegend>
+          <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
             <Field data-invalid={delayError ? true : undefined}>
-              <FieldLabel htmlFor={ids.delayMin}>Минимум</FieldLabel>
+              <FieldLabel htmlFor={ids.delayMin} className="sr-only">Минимум</FieldLabel>
               <Input
                 id={ids.delayMin}
                 type="number"
@@ -215,8 +219,9 @@ export function TrackerForm({ profileId, tracker }: Props) {
                 onChange={setField("delayMin", "preActionDelay")}
               />
             </Field>
+            <span aria-hidden="true" className="text-muted-foreground">—</span>
             <Field data-invalid={delayError ? true : undefined}>
-              <FieldLabel htmlFor={ids.delayMax}>Максимум</FieldLabel>
+              <FieldLabel htmlFor={ids.delayMax} className="sr-only">Максимум</FieldLabel>
               <Input
                 id={ids.delayMax}
                 type="number"
@@ -233,10 +238,15 @@ export function TrackerForm({ profileId, tracker }: Props) {
           {delayError && <FieldError id={ids.delayError}>{delayError}</FieldError>}
         </FieldSet>
 
-        <Field data-invalid={resumeDelayError ? true : undefined}>
+        <Field className="gap-1" data-invalid={resumeDelayError ? true : undefined}>
+          <div className="flex items-center gap-1">
           <FieldLabel htmlFor={ids.resumeDelay}>
             Пауза до возобновления опроса, мс
           </FieldLabel>
+          <FieldInfo label="Пауза до возобновления опроса">
+            Сколько ждать после действия, прежде чем снова проверять пиксели.
+          </FieldInfo>
+          </div>
           <Input
             id={ids.resumeDelay}
             type="number"
@@ -248,9 +258,6 @@ export function TrackerForm({ profileId, tracker }: Props) {
             aria-describedby={resumeDelayError ? ids.resumeDelayError : undefined}
             onChange={setField("resumeDelay", "resumeDelay")}
           />
-          <FieldDescription>
-            Сколько ждать после действия, прежде чем снова проверять пиксели.
-          </FieldDescription>
           {resumeDelayError && (
             <FieldError id={ids.resumeDelayError}>{resumeDelayError}</FieldError>
           )}
