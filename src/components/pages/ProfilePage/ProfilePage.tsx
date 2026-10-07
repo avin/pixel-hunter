@@ -144,7 +144,7 @@ export function ProfilePage() {
             <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
                 <TableHead>Имя</TableHead>
-                <TableHead>Состояние</TableHead>
+                <TableHead className="w-28 min-w-28">Состояние</TableHead>
                 <TableHead>Задержка перед действием</TableHead>
                 <TableHead>Пауза до возобновления</TableHead>
                 <TableHead className="w-0">

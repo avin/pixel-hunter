@@ -26,6 +26,7 @@ export function RunToggle({ profileId, tracker }: Props) {
       <Button
         variant={isRunning ? "destructive" : "outline"}
         size="sm"
+        className="w-24"
         aria-pressed={isRunning}
         aria-describedby={hint ? hintId : undefined}
         disabled={Boolean(hint) || isLoading}
