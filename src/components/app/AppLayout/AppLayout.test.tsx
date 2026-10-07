@@ -32,6 +32,7 @@ describe("workspace navigation", () => {
     expect(screen.queryByRole("button", { name: "Изменить профиль «Diablo» в навигации" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Удалить профиль «Diablo» в навигации" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Создать отслеживание в профиле «Diablo»" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Удалить отслеживание/ })).not.toBeInTheDocument();
     expect(backend.callsOf("engine_activate")).toEqual([]);
 
     await user.click(
@@ -74,14 +75,14 @@ describe("workspace navigation", () => {
     );
   });
 
-  it("asks for tracker deletion after leaving its editor and keeps it on cancellation", async () => {
+  it("asks for tracker deletion in its editor and keeps it on cancellation", async () => {
     const { user, backend } = renderApp(
       createFakeBackend({ profiles: [profile] }),
       ["/profiles/diablo/trackers/health"],
     );
     await user.click(
       await screen.findByRole("button", {
-        name: "Удалить отслеживание «Здоровье» в навигации",
+        name: "Удалить отслеживание «Здоровье»",
       }),
     );
     expect(
@@ -91,7 +92,7 @@ describe("workspace navigation", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Отмена" }));
     expect(
-      screen.getByRole("heading", { level: 1, name: "Diablo" }),
+      screen.getByRole("heading", { level: 1, name: "Здоровье" }),
     ).toBeInTheDocument();
     expect(backend.state.profiles[0].trackers).toHaveLength(1);
     expect(
@@ -99,25 +100,22 @@ describe("workspace navigation", () => {
     ).toBeInTheDocument();
   });
 
-  it.each([
-    "Удалить отслеживание «Здоровье» в навигации",
-  ])("keeps invalid input in the editor before %s", async (command) => {
+  it("deletes a tracker with an invalid draft and returns to its profile", async () => {
     const { user, backend } = renderApp(
       createFakeBackend({ profiles: [profile] }),
       ["/profiles/diablo/trackers/health"],
     );
     const name = await screen.findByRole("textbox", { name: "Имя" });
     await user.clear(name);
-    await user.click(screen.getByRole("button", { name: command }));
+    await user.click(screen.getByRole("button", { name: "Удалить отслеживание «Здоровье»" }));
     expect(
-      screen.getByRole("heading", { level: 1, name: "Здоровье" }),
+      await screen.findByRole("alertdialog", { name: "Удалить отслеживание «Здоровье»?" }),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
-    expect(name).toHaveFocus();
-    expect(backend.callsOf("profile_delete")).toEqual([]);
-    expect(backend.callsOf("tracker_delete")).toEqual([]);
+    await user.click(screen.getByRole("button", { name: "Удалить" }));
     expect(
-      screen.getByRole("link", { name: "Открыть отслеживание «Здоровье»" }),
-    ).toHaveAttribute("aria-current", "page");
+      await screen.findByRole("heading", { level: 1, name: "Diablo" }),
+    ).toBeInTheDocument();
+    expect(backend.state.profiles[0].trackers).toHaveLength(0);
+    expect(backend.callsOf("tracker_update")).toEqual([]);
   });
 });

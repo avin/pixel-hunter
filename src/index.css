@@ -6,6 +6,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --animate-pixel-marker-motion: pixel-marker-motion 3s linear infinite;
+  --animate-pixel-marker-color: pixel-marker-color 1.5s ease-in-out infinite alternate;
   --radius-sm: max(0px, calc(var(--radius) - 4px));
   --radius-md: max(0px, calc(var(--radius) - 2px));
   --radius-lg: var(--radius);
@@ -50,6 +52,19 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@keyframes pixel-marker-motion {
+  0% { transform: rotate(0deg) scale(1); }
+  25% { transform: rotate(90deg) scale(1.35); }
+  50% { transform: rotate(180deg) scale(1); }
+  75% { transform: rotate(270deg) scale(1.35); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+@keyframes pixel-marker-color {
+  from { color: var(--color-red-500); }
+  to { color: var(--color-violet-500); }
 }
 
 :root {

@@ -15,15 +15,17 @@ interface Props {
   profileId: string;
   tracker: Tracker;
   onClose: () => void;
+  onDeleted?: () => void;
 }
 
-export function DeleteTrackerDialog({ profileId, tracker, onClose }: Props) {
+export function DeleteTrackerDialog({ profileId, tracker, onClose, onDeleted }: Props) {
   const [deleteTracker, { isLoading }] = useDeleteTrackerMutation();
 
   async function handleDelete() {
     const result = await deleteTracker({ profileId, trackerId: tracker.id });
     if (!("error" in result)) {
       onClose();
+      onDeleted?.();
     }
   }
 

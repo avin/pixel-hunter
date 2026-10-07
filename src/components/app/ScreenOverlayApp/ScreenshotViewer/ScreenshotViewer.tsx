@@ -107,17 +107,21 @@ function PixelMarker({ pixel, size }: PixelMarkerProps) {
       width="100%"
       height="100%"
       viewBox={`0 0 ${width} ${height}`}
-      className="pointer-events-none absolute top-0 left-0 text-red-500"
+      className="pointer-events-none absolute top-0 left-0 text-red-500 animate-pixel-marker-color"
     >
-      <circle
-        cx={centerX}
-        cy={centerY}
-        r={RING_RADIUS}
-        fill="none"
+      <g
+        className="animate-pixel-marker-motion"
+        style={{ transformOrigin: `${centerX}px ${centerY}px` }}
         stroke="currentColor"
-        strokeWidth={RING_WIDTH}
-      />
-      <g stroke="currentColor" strokeWidth={1} shapeRendering="crispEdges">
+        strokeWidth={1}
+      >
+        <circle
+          cx={centerX}
+          cy={centerY}
+          r={RING_RADIUS}
+          fill="none"
+          strokeWidth={RING_WIDTH}
+        />
         <line x1={centerX - CROSS_REACH} y1={centerY} x2={centerX + CROSS_REACH} y2={centerY} />
         <line x1={centerX} y1={centerY - CROSS_REACH} x2={centerX} y2={centerY + CROSS_REACH} />
       </g>

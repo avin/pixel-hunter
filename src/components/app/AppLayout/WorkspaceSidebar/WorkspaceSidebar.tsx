@@ -3,11 +3,10 @@ import {
   ChevronRight,
   List,
   Plus,
-  Trash2,
 } from "lucide-react";
 import { cn } from "cn";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { profilePath, trackerPath } from "@/components/app/AppRouter/paths";
 import { ProfileDialog } from "@/components/pages/ProfilesPage/ProfileDialog/ProfileDialog";
 import { Button } from "@/components/ui/button";
@@ -26,7 +25,6 @@ const linkClass =
 
 export function WorkspaceSidebar({ profileId, trackerId, isLeaving }: Props) {
   const { data: profiles, isLoading, isError } = useListProfilesQuery();
-  const navigate = useNavigate();
   const [expandedProfiles, setExpandedProfiles] = useState<
     Record<string, boolean>
   >({});
@@ -138,19 +136,6 @@ export function WorkspaceSidebar({ profileId, trackerId, isLeaving }: Props) {
                           </span>
                         )}
                       </Link>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        disabled={isLeaving}
-                        aria-label={`Удалить отслеживание «${tracker.name}» в навигации`}
-                        onClick={() =>
-                          navigate(profilePath(profile.id), {
-                            state: { deleteTrackerId: tracker.id },
-                          })
-                        }
-                      >
-                        <Trash2 />
-                      </Button>
                     </div>
                   ))}
                 </div>

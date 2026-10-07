@@ -1,6 +1,6 @@
 import { Pencil, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
+import { useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { trackerPath } from "@/components/app/AppRouter/paths";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -37,19 +37,7 @@ export function ProfilePage() {
   const [isDeleteProfileOpen, setIsDeleteProfileOpen] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [trackerToDelete, setTrackerToDelete] = useState<Tracker>();
-  const location = useLocation();
   const navigate = useNavigate();
-  const deleteTrackerId = (
-    location.state as { deleteTrackerId?: string } | null
-  )?.deleteTrackerId;
-
-  useEffect(() => {
-    if (!deleteTrackerId || !profile) return;
-    setTrackerToDelete(
-      profile.trackers.find(({ id }) => id === deleteTrackerId),
-    );
-    navigate(location.pathname, { replace: true, state: null });
-  }, [deleteTrackerId, profile, navigate, location.pathname]);
 
   if (isLoading) {
     return (
