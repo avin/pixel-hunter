@@ -99,27 +99,18 @@ export function TrackerSplit({ pixels, action }: Props) {
         <div
           ref={handleRef}
           role="separator"
-          tabIndex={0}
           aria-label="Высота области пикселей"
           aria-orientation="horizontal"
           aria-valuemin={min}
           aria-valuemax={max}
           aria-valuenow={displayedPercent}
           aria-valuetext={`${Math.round(displayedPercent)}% для пикселей`}
-          className="h-2 touch-none cursor-row-resize outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          onKeyDown={(event) => {
-            if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
-            event.preventDefault();
-            const next = clamp(displayedPercent + (event.key === "ArrowUp" ? -1 : 1), measureHeight());
-            setPercent(next);
-            savePercent(next);
-          }}
+          className="h-2 touch-none cursor-row-resize"
           onPointerDown={(event) => {
             if (event.button !== 0 || dragRef.current) return;
             const height = measureHeight();
             if (height <= 0) return;
             event.preventDefault();
-            event.currentTarget.focus();
             event.currentTarget.setPointerCapture(event.pointerId);
             dragRef.current = { pointerId: event.pointerId, startY: event.clientY, percent: clamp(percent, height), height };
             setIsDragging(true);

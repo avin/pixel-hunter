@@ -40,32 +40,31 @@ afterEach(() => {
 });
 
 describe("TrackerSplit", () => {
-  it("changes the pixel share by one percent with the keyboard and restores it on reopening", async () => {
+  it("skips the separator when tabbing between section controls", async () => {
     const user = userEvent.setup();
-    const rendered = renderSplit();
+    render(
+      <TrackerSplit
+        pixels={<button>Пиксели</button>}
+        action={<button>Действие</button>}
+      />,
+    );
     await user.tab();
-    expect(separator()).toHaveFocus();
-    expect(separator()).toHaveAttribute("aria-orientation", "horizontal");
-    await user.keyboard("{ArrowUp}");
-    expect(separator()).toHaveAttribute("aria-valuenow", "49");
-    expect(localStorage.getItem(storageKey)).toBe("49");
-    await user.keyboard("{ArrowDown}{ArrowDown}");
-    expect(separator()).toHaveAttribute("aria-valuenow", "51");
-    rendered.unmount();
-    renderSplit();
-    expect(separator()).toHaveAttribute("aria-valuenow", "51");
+    expect(screen.getByRole("button", { name: "Пиксели" })).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole("button", { name: "Действие" })).toHaveFocus();
+    separator().focus();
+    expect(screen.getByRole("button", { name: "Действие" })).toHaveFocus();
   });
 
-  it("keeps both sections accessible at the keyboard limits", async () => {
+  it("keeps both sections visible at the stored ratio limits", () => {
     localStorage.setItem(storageKey, "20");
-    const user = userEvent.setup();
-    renderSplit();
-    await user.tab();
-    await user.keyboard("{ArrowUp}");
+    const rendered = renderSplit();
     // 144 px of the available 600 px must remain visible.
     expect(separator()).toHaveAttribute("aria-valuenow", "24");
     expect(separator()).toHaveAttribute("aria-valuemin", "24");
-    await user.keyboard("{ArrowDown>60/}");
+    rendered.unmount();
+    localStorage.setItem(storageKey, "80");
+    renderSplit();
     expect(separator()).toHaveAttribute("aria-valuenow", "76");
     expect(separator()).toHaveAttribute("aria-valuemax", "76");
   });
@@ -95,9 +94,13 @@ describe("TrackerSplit", () => {
     vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Unavailable"); });
     const user = userEvent.setup();
     const rendered = renderSplit();
-    await user.tab();
+    const handle = separator();
+    handle.setPointerCapture = vi.fn();
+    handle.releasePointerCapture = vi.fn();
     const initial = Number(separator().getAttribute("aria-valuenow"));
-    await user.keyboard("{ArrowUp}");
+    await user.pointer({ keys: "[MouseLeft>]", target: handle, coords: { clientY: 300 } });
+    await user.pointer({ target: handle, coords: { clientY: 294 } });
+    await user.pointer({ keys: "[/MouseLeft]", target: handle });
     expect(separator()).toHaveAttribute("aria-valuenow", String(initial - 1));
     rendered.unmount();
     renderSplit();
@@ -113,6 +116,7 @@ describe("TrackerSplit", () => {
     handle.setPointerCapture = capture;
     handle.releasePointerCapture = release;
     await user.pointer({ keys: "[MouseLeft>]", target: handle, coords: { clientY: 300 } });
+    expect(handle).not.toHaveFocus();
     await user.pointer({ target: handle, coords: { clientY: 210 } });
     expect(separator()).toHaveAttribute("aria-valuenow", "35");
     expect(localStorage.getItem(storageKey)).toBeNull();
