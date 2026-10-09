@@ -36,14 +36,19 @@ pub struct SoundSettings {
 
 impl Default for SoundSettings {
     fn default() -> Self {
-        Self { id: None, volume_percent: 50 }
+        Self {
+            id: None,
+            volume_percent: 50,
+        }
     }
 }
 
 impl SoundSettings {
     pub fn validate(&self) -> AppResult<()> {
         if self.volume_percent > 100 {
-            return Err(AppError::Validation("Громкость должна быть от 0 до 100%".into()));
+            return Err(AppError::Validation(
+                "Громкость должна быть от 0 до 100%".into(),
+            ));
         }
         if let Some(id) = &self.id {
             if !crate::action_sound::is_known_id(id) {
@@ -57,7 +62,10 @@ impl SoundSettings {
 impl Action {
     #[cfg(test)]
     pub fn key_sequence(sequence: KeySequenceAction) -> Self {
-        Self { kind: ActionKind::KeySequence(sequence), sound: SoundSettings::default() }
+        Self {
+            kind: ActionKind::KeySequence(sequence),
+            sound: SoundSettings::default(),
+        }
     }
     pub fn normalize(&mut self) {
         match &mut self.kind {
@@ -157,11 +165,25 @@ mod tests {
         for (sound, expected) in [
             (None, SoundSettings::default()),
             (Some(json!({})), SoundSettings::default()),
-            (Some(json!({ "id": "soft-ping" })), SoundSettings { id: Some("soft-ping".into()), volume_percent: 50 }),
-            (Some(json!({ "volumePercent": 20 })), SoundSettings { id: None, volume_percent: 20 }),
+            (
+                Some(json!({ "id": "soft-ping" })),
+                SoundSettings {
+                    id: Some("soft-ping".into()),
+                    volume_percent: 50,
+                },
+            ),
+            (
+                Some(json!({ "volumePercent": 20 })),
+                SoundSettings {
+                    id: None,
+                    volume_percent: 20,
+                },
+            ),
         ] {
             let mut value = json!({ "type": "keySequence", "steps": [] });
-            if let Some(sound) = sound { value["sound"] = sound; }
+            if let Some(sound) = sound {
+                value["sound"] = sound;
+            }
             let action: Action = serde_json::from_value(value).unwrap();
             assert_eq!(action.sound, expected);
             assert!(action.is_empty());
@@ -171,14 +193,30 @@ mod tests {
     #[test]
     fn validates_sound_id_and_volume_boundaries() {
         for volume_percent in [0, 100] {
-            assert!(SoundSettings { id: Some("soft-ping".into()), volume_percent }.validate().is_ok());
+            assert!(SoundSettings {
+                id: Some("soft-ping".into()),
+                volume_percent
+            }
+            .validate()
+            .is_ok());
         }
-        assert!(SoundSettings { id: Some("unknown-sound".into()), volume_percent: 50 }.validate().is_err());
-        assert!(SoundSettings { id: None, volume_percent: 101 }.validate().is_err());
+        assert!(SoundSettings {
+            id: Some("unknown-sound".into()),
+            volume_percent: 50
+        }
+        .validate()
+        .is_err());
+        assert!(SoundSettings {
+            id: None,
+            volume_percent: 101
+        }
+        .validate()
+        .is_err());
         for volume in [json!(-1), json!(50.5), json!(256)] {
             assert!(serde_json::from_value::<Action>(json!({
                 "type": "keySequence", "steps": [], "sound": { "volumePercent": volume }
-            })).is_err());
+            }))
+            .is_err());
         }
     }
 
@@ -200,7 +238,11 @@ mod tests {
     #[test]
     fn serializes_tagged_by_type() {
         let first = step("KeyQ", vec![], None);
-        let second = step("Digit1", vec![Modifier::Ctrl], Some(DelayRange { min: 300, max: 600 }));
+        let second = step(
+            "Digit1",
+            vec![Modifier::Ctrl],
+            Some(DelayRange { min: 300, max: 600 }),
+        );
         let action = Action::key_sequence(sequence(vec![first.clone(), second.clone()]));
 
         let value = serde_json::to_value(&action).unwrap();
@@ -249,7 +291,12 @@ mod tests {
     fn orders_modifiers_canonically() {
         let mut action = sequence(vec![step(
             "Digit1",
-            vec![Modifier::Alt, Modifier::Ctrl, Modifier::Shift, Modifier::Ctrl],
+            vec![
+                Modifier::Alt,
+                Modifier::Ctrl,
+                Modifier::Shift,
+                Modifier::Ctrl,
+            ],
             None,
         )]);
 
@@ -263,7 +310,11 @@ mod tests {
 
     #[test]
     fn drops_modifier_pressed_as_the_key() {
-        let mut action = sequence(vec![step("ShiftLeft", vec![Modifier::Shift, Modifier::Ctrl], None)]);
+        let mut action = sequence(vec![step(
+            "ShiftLeft",
+            vec![Modifier::Shift, Modifier::Ctrl],
+            None,
+        )]);
 
         action.normalize();
 

@@ -344,7 +344,11 @@ mod tests {
         assert!(is_game(&mut cache, game, &mut lookups));
         assert_eq!(lookups, 1);
 
-        assert!(!is_game(&mut cache, Some((WindowHandle(2), 20)), &mut lookups));
+        assert!(!is_game(
+            &mut cache,
+            Some((WindowHandle(2), 20)),
+            &mut lookups
+        ));
         assert!(!is_game(&mut cache, None, &mut lookups));
         assert!(is_game(&mut cache, game, &mut lookups));
         assert_eq!(lookups, 3);

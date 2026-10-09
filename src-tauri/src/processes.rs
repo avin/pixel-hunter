@@ -6,8 +6,7 @@ use windows::core::{BOOL, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION,
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowTextW,
@@ -59,9 +58,7 @@ fn group_by_exe(windows: impl IntoIterator<Item = (String, String)>) -> Vec<Wind
             .iter_mut()
             .find(|group| group.exe_name.eq_ignore_ascii_case(&exe_name))
         {
-            Some(group) if !group.window_titles.contains(&title) => {
-                group.window_titles.push(title)
-            }
+            Some(group) if !group.window_titles.contains(&title) => group.window_titles.push(title),
             Some(_) => {}
             None => groups.push(WindowedProcess {
                 exe_name,

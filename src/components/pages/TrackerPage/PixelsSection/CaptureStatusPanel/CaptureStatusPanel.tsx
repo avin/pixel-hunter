@@ -31,9 +31,9 @@ export function CaptureStatusPanel({ status, processName, onCancel, onDismiss }:
     <div className="flex shrink-0 items-center justify-between gap-2 border-b bg-muted/50 px-3 py-2 text-xs">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <p role="status" aria-label="Состояние захвата">{phaseMessage(status, processName)}</p>
-        {"remainingMs" in status && (
+        {status.phase === "waitingForGame" && (
           <span className="shrink-0 font-mono font-medium tabular-nums">
-            {Math.ceil(status.remainingMs / 1000)} с
+            {formatRemaining(status.remainingMs)}
           </span>
         )}
       </div>
@@ -44,12 +44,17 @@ export function CaptureStatusPanel({ status, processName, onCancel, onDismiss }:
   );
 }
 
+function formatRemaining(remainingMs: number) {
+  if (remainingMs < 1000) return `${remainingMs} мс`;
+  return `${Math.ceil(remainingMs / 1000)} с`;
+}
+
 function phaseMessage(status: CaptureStatus, processName: string) {
   switch (status.phase) {
     case "waitingForGame":
       return `Переключитесь в окно игры ${processName}`;
     case "countdown":
-      return "Снимок экрана через";
+      return "Делаем снимок экрана...";
     default:
       return "Выберите точку на снимке. Esc — отмена";
   }

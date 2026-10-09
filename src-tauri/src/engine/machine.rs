@@ -20,10 +20,16 @@ pub struct Job {
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Phase {
     Polling,
-    PreDelay { until: Duration },
+    PreDelay {
+        until: Duration,
+    },
     /// Waiting in the executor queue or being played.
-    Queued { ticket: u64 },
-    Resume { until: Duration },
+    Queued {
+        ticket: u64,
+    },
+    Resume {
+        until: Duration,
+    },
 }
 
 struct Run {
@@ -133,7 +139,11 @@ impl EngineCore {
         };
 
         let mut colors = colors.into_iter();
-        for run in self.runs.iter_mut().filter(|run| run.phase == Phase::Polling) {
+        for run in self
+            .runs
+            .iter_mut()
+            .filter(|run| run.phase == Phase::Polling)
+        {
             let samples: Vec<_> = colors.by_ref().take(run.tracker.pixels.len()).collect();
             let all_passed = run
                 .tracker
@@ -173,7 +183,11 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    const RED: Rgb = Rgb { r: 200, g: 30, b: 30 };
+    const RED: Rgb = Rgb {
+        r: 200,
+        g: 30,
+        b: 30,
+    };
     const BLACK: Rgb = Rgb { r: 0, g: 0, b: 0 };
 
     fn ms(value: u64) -> Duration {
@@ -297,8 +311,15 @@ mod tests {
         let reads_before = h.reads.len();
         assert!(h.run(150, 500).is_empty(), "no second run while queued");
         h.core.action_done(jobs[0].1.ticket, ms(500));
-        assert!(h.run(550, 1450).is_empty(), "no polling during the resume pause");
-        assert_eq!(h.reads.len(), reads_before, "pixels are not read until the pause ends");
+        assert!(
+            h.run(550, 1450).is_empty(),
+            "no polling during the resume pause"
+        );
+        assert_eq!(
+            h.reads.len(),
+            reads_before,
+            "pixels are not read until the pause ends"
+        );
 
         let next = h.run(1500, 1600);
         assert_eq!(next.first().map(|(t, _)| *t), Some(1600));
@@ -318,7 +339,10 @@ mod tests {
             })
             .collect();
 
-        assert!(delays.iter().all(|delay| (100..=300).contains(delay)), "{delays:?}");
+        assert!(
+            delays.iter().all(|delay| (100..=300).contains(delay)),
+            "{delays:?}"
+        );
         assert!(delays.iter().any(|delay| *delay < 150));
         assert!(delays.iter().any(|delay| *delay > 250));
     }
@@ -377,7 +401,10 @@ mod tests {
 
         let jobs = h.tick(ms(0));
 
-        assert_eq!(jobs.iter().map(|job| job.tracker_id).collect::<Vec<_>>(), [b.id]);
+        assert_eq!(
+            jobs.iter().map(|job| job.tracker_id).collect::<Vec<_>>(),
+            [b.id]
+        );
     }
 
     #[test]
@@ -446,7 +473,10 @@ mod tests {
         let mut cancelled = h.core.clear();
         cancelled.sort();
 
-        assert_eq!(cancelled, jobs.iter().map(|job| job.ticket).collect::<Vec<_>>());
+        assert_eq!(
+            cancelled,
+            jobs.iter().map(|job| job.ticket).collect::<Vec<_>>()
+        );
         assert!(h.run(50, 1000).is_empty());
     }
 
@@ -483,7 +513,14 @@ mod tests {
     fn new_tolerance_applies_from_the_next_poll() {
         let mut health = tracker(&[(1, 1)], (0, 0), 0);
         let mut h = Harness::new(&[health.clone()]);
-        h.paint((1, 1), Rgb { r: 200, g: 30, b: 70 });
+        h.paint(
+            (1, 1),
+            Rgb {
+                r: 200,
+                g: 30,
+                b: 70,
+            },
+        );
         assert!(h.tick(ms(0)).is_empty());
 
         health.pixels[0].tolerance_percent = 20;
@@ -542,7 +579,10 @@ mod tests {
         let mut h = Harness::new(&[health.clone()]);
         h.paint((1, 1), RED);
         assert!(h.tick(ms(0)).is_empty());
-        health.action.sound = crate::action::SoundSettings { id: Some("bright-bell".into()), volume_percent: 20 };
+        health.action.sound = crate::action::SoundSettings {
+            id: Some("bright-bell".into()),
+            volume_percent: 20,
+        };
         h.core.set_trackers(&[health.clone()]);
         assert_eq!(h.tick(ms(100))[0].action.sound, health.action.sound);
     }
@@ -554,7 +594,10 @@ mod tests {
         let mut h = Harness::new(&[health.clone()]);
         h.paint((1, 1), RED);
         let first = h.tick(ms(0)).remove(0);
-        health.action.sound = crate::action::SoundSettings { id: Some("bright-bell".into()), volume_percent: 20 };
+        health.action.sound = crate::action::SoundSettings {
+            id: Some("bright-bell".into()),
+            volume_percent: 20,
+        };
         h.core.set_trackers(&[health.clone()]);
         assert_eq!(first.action.sound.id.as_deref(), Some("soft-ping"));
         assert_eq!(first.action.sound.volume_percent, 50);
@@ -622,7 +665,12 @@ mod tests {
         let mut core = EngineCore::default();
         core.set_trackers(&[tracker(&[(1, 1), (2, 2)], (0, 0), 0)]);
 
-        let jobs = core.tick(ms(0), false, |_| Some(vec![RED]), &mut StdRng::seed_from_u64(0));
+        let jobs = core.tick(
+            ms(0),
+            false,
+            |_| Some(vec![RED]),
+            &mut StdRng::seed_from_u64(0),
+        );
 
         assert!(jobs.is_empty());
     }

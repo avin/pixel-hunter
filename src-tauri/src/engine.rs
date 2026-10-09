@@ -13,9 +13,9 @@ use std::thread;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::config::Config;
 use crate::action::Action;
 use crate::action_sound::AudioService;
+use crate::config::Config;
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::keyboard;
@@ -45,7 +45,10 @@ impl Engine {
         Self::start_with_audio(AudioService::start(), emit)
     }
 
-    pub fn start_with_audio(audio: AudioService, emit: impl Fn(EngineStatus) + Send + 'static) -> Self {
+    pub fn start_with_audio(
+        audio: AudioService,
+        emit: impl Fn(EngineStatus) + Send + 'static,
+    ) -> Self {
         let (commands, command_receiver) = mpsc::channel();
         let (jobs, job_receiver) = mpsc::channel();
         let cancelled = Arc::new(CancelledJobs::default());
@@ -59,7 +62,11 @@ impl Engine {
                 &executor_cancelled,
                 &executor_paused,
                 |action| {
-                    play_action(action, |sound| audio.play_runtime(sound), keyboard::run_action);
+                    play_action(
+                        action,
+                        |sound| audio.play_runtime(sound),
+                        keyboard::run_action,
+                    );
                 },
                 thread::sleep,
                 |ticket| {
@@ -116,7 +123,11 @@ impl Engine {
         let Some(profile_id) = *active else {
             return;
         };
-        match config.profiles.iter().find(|profile| profile.id == profile_id) {
+        match config
+            .profiles
+            .iter()
+            .find(|profile| profile.id == profile_id)
+        {
             Some(profile) => self.send(Command::Update(profile.clone())),
             None => {
                 *active = None;
@@ -250,7 +261,11 @@ mod tests {
 
         assert_eq!(
             sent(&receiver),
-            [Sent::Activate(ids[0]), Sent::Deactivate, Sent::Activate(ids[1])]
+            [
+                Sent::Activate(ids[0]),
+                Sent::Deactivate,
+                Sent::Activate(ids[1])
+            ]
         );
     }
 

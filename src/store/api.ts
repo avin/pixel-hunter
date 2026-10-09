@@ -8,6 +8,7 @@ import type {
   PixelInput,
   Profile,
   ProfileInput,
+  PickerFrame,
   ScreenshotViewRequest,
   Tracker,
   TrackerInput,
@@ -196,6 +197,25 @@ export const tauriApi = createApi({
       query: () => ({ command: "screenshots_dir" }),
       keepUnusedDataFor: Infinity,
     }),
+    pickerReady: builder.mutation<void, void>({
+      query: () => ({ command: "picker_ready" }),
+    }),
+    pickerFrame: builder.query<PickerFrame | null, void>({
+      query: () => ({ command: "picker_frame" }),
+      keepUnusedDataFor: 0,
+    }),
+    pickerFrameDrawn: builder.mutation<void, PickerFrame>({
+      query: ({ profileId, pixelId }) => ({
+        command: "picker_frame_drawn",
+        args: { profileId, pixelId },
+      }),
+    }),
+    pickerFrameFailed: builder.mutation<void, PickerFrame>({
+      query: ({ profileId, pixelId }) => ({
+        command: "picker_frame_failed",
+        args: { profileId, pixelId },
+      }),
+    }),
     listWindowedProcesses: builder.query<WindowedProcess[], void>({
       query: () => ({ command: "windowed_processes_list" }),
       keepUnusedDataFor: 0,
@@ -230,5 +250,9 @@ export const {
   useScreenshotViewCloseMutation,
   useScreenshotViewFailedMutation,
   useScreenshotsDirQuery,
+  usePickerReadyMutation,
+  useLazyPickerFrameQuery,
+  usePickerFrameDrawnMutation,
+  usePickerFrameFailedMutation,
   useListWindowedProcessesQuery,
 } = tauriApi;

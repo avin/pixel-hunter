@@ -58,9 +58,11 @@ describe("Pixel capture on TrackerPage", () => {
     await emitStatus({ phase: "waitingForGame", remainingMs: 7_400 });
     expect(screen.getByText("8 с")).toBeInTheDocument();
 
-    await emitStatus({ phase: "countdown", remainingMs: 2_100 });
-    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Снимок экрана через");
-    expect(screen.getByText("3 с")).toBeInTheDocument();
+    await emitStatus({ phase: "countdown", remainingMs: 200 });
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent(
+      "Делаем снимок экрана...",
+    );
+    expect(screen.queryByText("200 мс")).not.toBeInTheDocument();
 
     await emitStatus({ phase: "picking" });
     expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Выберите точку на снимке");

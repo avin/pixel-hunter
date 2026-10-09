@@ -61,7 +61,9 @@ pub fn run() {
             app.manage(Screenshots::new(app_data_dir.join("screenshots")));
             app.manage(PixelCapture::default());
             app.manage(screenshot_viewer::ScreenshotViewer::default());
+            app.manage(screen_overlay::PickerOverlay::default());
             screenshot_viewer::register_cleanup(app.handle());
+            screen_overlay::register_cleanup(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -92,6 +94,10 @@ pub fn run() {
             screenshot_viewer::screenshot_view_ready,
             screenshot_viewer::screenshot_view_close,
             screenshot_viewer::screenshot_view_failed,
+            screen_overlay::picker_ready,
+            screen_overlay::picker_frame,
+            screen_overlay::picker_frame_drawn,
+            screen_overlay::picker_frame_failed,
             commands::screenshots_dir,
             commands::windowed_processes_list,
         ])

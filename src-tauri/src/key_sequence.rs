@@ -134,8 +134,13 @@ mod tests {
         fn run(action: &KeySequenceAction, seed: u64) -> Vec<Entry> {
             let recorder = Recorder::default();
             let mut input = recorder.clone();
-            execute_key_sequence(action, &mut input, &recorder, &mut StdRng::seed_from_u64(seed))
-                .unwrap();
+            execute_key_sequence(
+                action,
+                &mut input,
+                &recorder,
+                &mut StdRng::seed_from_u64(seed),
+            )
+            .unwrap();
             recorder.0.take()
         }
     }
@@ -187,13 +192,24 @@ mod tests {
 
     #[test]
     fn presses_modifiers_around_the_key() {
-        let action = sequence(vec![step("Digit1", vec![Modifier::Ctrl, Modifier::Shift], None)]);
+        let action = sequence(vec![step(
+            "Digit1",
+            vec![Modifier::Ctrl, Modifier::Shift],
+            None,
+        )]);
 
         let entries = Recorder::run(&action, 1);
 
         assert_eq!(
             keys(&entries),
-            [(0x1D, DOWN), (0x2A, DOWN), (0x02, DOWN), (0x02, UP), (0x2A, UP), (0x1D, UP)]
+            [
+                (0x1D, DOWN),
+                (0x2A, DOWN),
+                (0x02, DOWN),
+                (0x02, UP),
+                (0x2A, UP),
+                (0x1D, UP)
+            ]
         );
         for (from, to) in [(0, 1), (1, 2), (3, 4), (4, 5)] {
             let gap = time_between(&entries, from, to);
@@ -203,13 +219,19 @@ mod tests {
 
     #[test]
     fn waits_a_random_delay_from_the_step_range() {
-        let action = sequence(vec![step("KeyQ", vec![], None), step("KeyW", vec![], Some((300, 600)))]);
+        let action = sequence(vec![
+            step("KeyQ", vec![], None),
+            step("KeyW", vec![], Some((300, 600))),
+        ]);
 
         let delays: Vec<_> = (0..200)
             .map(|seed| time_between(&Recorder::run(&action, seed), 1, 2).as_millis())
             .collect();
 
-        assert!(delays.iter().all(|delay| (300..=600).contains(delay)), "{delays:?}");
+        assert!(
+            delays.iter().all(|delay| (300..=600).contains(delay)),
+            "{delays:?}"
+        );
         assert!(delays.iter().any(|delay| *delay < 400));
         assert!(delays.iter().any(|delay| *delay > 500));
     }
@@ -222,7 +244,10 @@ mod tests {
             .map(|seed| time_between(&Recorder::run(&action, seed), 0, 1).as_millis())
             .collect();
 
-        assert!(holds.iter().all(|hold| (40..=90).contains(hold)), "{holds:?}");
+        assert!(
+            holds.iter().all(|hold| (40..=90).contains(hold)),
+            "{holds:?}"
+        );
         assert!(holds.iter().any(|hold| *hold != holds[0]));
     }
 
@@ -238,7 +263,14 @@ mod tests {
 
         assert_eq!(
             keys(&entries),
-            [(0x10, DOWN), (0x10, UP), (0x48, DOWN), (0x48, UP), (0x3F, DOWN), (0x3F, UP)]
+            [
+                (0x10, DOWN),
+                (0x10, UP),
+                (0x48, DOWN),
+                (0x48, UP),
+                (0x3F, DOWN),
+                (0x3F, UP)
+            ]
         );
         let arrow = entries.iter().find_map(|entry| match entry {
             Entry::Key(event) if event.scan_code == 0x48 => Some(event.is_extended),
@@ -249,12 +281,19 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_key_before_any_input() {
-        let action = sequence(vec![step("KeyQ", vec![], None), step("MetaLeft", vec![], Some((0, 0)))]);
+        let action = sequence(vec![
+            step("KeyQ", vec![], None),
+            step("MetaLeft", vec![], Some((0, 0))),
+        ]);
         let recorder = Recorder::default();
         let mut input = recorder.clone();
 
-        let result =
-            execute_key_sequence(&action, &mut input, &recorder, &mut StdRng::seed_from_u64(0));
+        let result = execute_key_sequence(
+            &action,
+            &mut input,
+            &recorder,
+            &mut StdRng::seed_from_u64(0),
+        );
 
         assert!(matches!(result, Err(AppError::Validation(_))));
         assert!(recorder.0.borrow().is_empty());

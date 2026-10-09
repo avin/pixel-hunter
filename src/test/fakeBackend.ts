@@ -8,6 +8,7 @@ import type {
   PixelInput,
   Profile,
   ProfileInput,
+  PickerFrame,
   ScreenshotViewRequest,
   Tracker,
   TrackerInput,
@@ -62,6 +63,8 @@ export function createFakeBackend({ profiles = [], processes = [], viewerRequest
     processes: structuredClone(processes),
     viewerRequest: viewerRequest ?? null as ScreenshotViewRequest | null,
     viewerVisible: false,
+    pickerFrame: null as PickerFrame | null,
+    pickerVisible: false,
   };
   const failures = new Map<string, string>();
   const pending = new Map<string, Promise<void>>();
@@ -218,6 +221,16 @@ export function createFakeBackend({ profiles = [], processes = [], viewerRequest
         return null;
       case "screenshots_dir":
         return SCREENSHOTS_DIR;
+      case "picker_ready":
+        return null;
+      case "picker_frame":
+        return state.pickerFrame ? structuredClone(state.pickerFrame) : null;
+      case "picker_frame_drawn":
+        state.pickerVisible = true;
+        return null;
+      case "picker_frame_failed":
+        state.pickerVisible = false;
+        return null;
       case "windowed_processes_list":
         return structuredClone(state.processes);
       default:

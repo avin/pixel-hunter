@@ -198,7 +198,11 @@ mod tests {
         ];
         for (code, scan_code, is_extended) in cases {
             let key = lookup(code).unwrap();
-            assert_eq!((key.scan_code, key.is_extended), (scan_code, is_extended), "{code}");
+            assert_eq!(
+                (key.scan_code, key.is_extended),
+                (scan_code, is_extended),
+                "{code}"
+            );
         }
     }
 
@@ -226,7 +230,10 @@ mod tests {
     #[test]
     fn has_unique_codes_and_scan_codes() {
         let codes: HashSet<_> = KEYS.iter().map(|key| key.code).collect();
-        let scan_codes: HashSet<_> = KEYS.iter().map(|key| (key.scan_code, key.is_extended)).collect();
+        let scan_codes: HashSet<_> = KEYS
+            .iter()
+            .map(|key| (key.scan_code, key.is_extended))
+            .collect();
 
         assert_eq!(codes.len(), KEYS.len());
         assert_eq!(scan_codes.len(), KEYS.len());

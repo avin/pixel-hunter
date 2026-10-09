@@ -72,7 +72,9 @@ pub fn create_tracker(store: &ConfigStore, profile_id: Uuid, name: String) -> Ap
     let tracker = Tracker::new(name.trim().into());
     tracker.validate()?;
     store.update(|config| {
-        find_profile(config, profile_id)?.trackers.push(tracker.clone());
+        find_profile(config, profile_id)?
+            .trackers
+            .push(tracker.clone());
         Ok(tracker)
     })
 }
@@ -250,14 +252,22 @@ pub fn get_pixel(
 }
 
 /// Process name of the profile that owns the tracker.
-pub fn profile_process_name(store: &ConfigStore, profile_id: Uuid, tracker_id: Uuid) -> AppResult<String> {
+pub fn profile_process_name(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+) -> AppResult<String> {
     store.read(|config| {
         let profile = config
             .profiles
             .iter()
             .find(|profile| profile.id == profile_id)
             .ok_or(PROFILE_NOT_FOUND)?;
-        if !profile.trackers.iter().any(|tracker| tracker.id == tracker_id) {
+        if !profile
+            .trackers
+            .iter()
+            .any(|tracker| tracker.id == tracker_id)
+        {
             return Err(TRACKER_NOT_FOUND);
         }
         Ok(profile.process_name.clone())
@@ -276,7 +286,11 @@ fn find_profile(config: &mut Config, id: Uuid) -> AppResult<&mut Profile> {
         .ok_or(PROFILE_NOT_FOUND)
 }
 
-fn find_tracker(config: &mut Config, profile_id: Uuid, tracker_id: Uuid) -> AppResult<&mut Tracker> {
+fn find_tracker(
+    config: &mut Config,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+) -> AppResult<&mut Tracker> {
     find_profile(config, profile_id)?
         .trackers
         .iter_mut()
@@ -320,16 +334,32 @@ mod tests {
 
         /// Adds a pixel to the tracker together with its screenshot files.
         fn pixel(&self, profile_id: Uuid, tracker_id: Uuid) -> Pixel {
-            let pixel = Pixel::new(Uuid::new_v4(), 812, 1040, Rgb { r: 200, g: 30, b: 30 });
+            let pixel = Pixel::new(
+                Uuid::new_v4(),
+                812,
+                1040,
+                Rgb {
+                    r: 200,
+                    g: 30,
+                    b: 30,
+                },
+            );
             fs::create_dir_all(self.screenshots.profile_dir(profile_id)).unwrap();
             fs::write(self.screenshots.image_path(profile_id, pixel.id), b"png").unwrap();
-            fs::write(self.screenshots.thumbnail_path(profile_id, pixel.id), b"png").unwrap();
+            fs::write(
+                self.screenshots.thumbnail_path(profile_id, pixel.id),
+                b"png",
+            )
+            .unwrap();
             add_pixel(&self.store, profile_id, tracker_id, pixel).unwrap()
         }
 
         fn has_screenshot(&self, profile_id: Uuid, pixel_id: Uuid) -> bool {
             self.screenshots.image_path(profile_id, pixel_id).exists()
-                || self.screenshots.thumbnail_path(profile_id, pixel_id).exists()
+                || self
+                    .screenshots
+                    .thumbnail_path(profile_id, pixel_id)
+                    .exists()
         }
     }
 
@@ -363,7 +393,8 @@ mod tests {
     fn creates_and_persists_profile() {
         let fixture = Fixture::new();
 
-        let profile = create_profile(&fixture.store, profile_input(" Diablo ", "game.exe")).unwrap();
+        let profile =
+            create_profile(&fixture.store, profile_input(" Diablo ", "game.exe")).unwrap();
 
         assert_eq!(profile.name, "Diablo");
         assert_eq!(profile.process_name, "game.exe");
@@ -376,7 +407,10 @@ mod tests {
     fn rejects_profile_without_name_or_process() {
         let fixture = Fixture::new();
 
-        assert_validation_error(create_profile(&fixture.store, profile_input(" ", "game.exe")));
+        assert_validation_error(create_profile(
+            &fixture.store,
+            profile_input(" ", "game.exe"),
+        ));
         assert_validation_error(create_profile(&fixture.store, profile_input("Diablo", "")));
         assert!(list_profiles(&fixture.store).is_empty());
     }
@@ -386,9 +420,12 @@ mod tests {
         let fixture = Fixture::new();
         let profile = fixture.profile("Diablo");
 
-        let updated =
-            update_profile(&fixture.store, profile.id, profile_input("Diablo IV", "diablo4.exe"))
-                .unwrap();
+        let updated = update_profile(
+            &fixture.store,
+            profile.id,
+            profile_input("Diablo IV", "diablo4.exe"),
+        )
+        .unwrap();
 
         assert_eq!(updated.id, profile.id);
         assert_eq!(updated.process_name, "diablo4.exe");
@@ -400,7 +437,11 @@ mod tests {
         let fixture = Fixture::new();
         let profile = fixture.profile("Diablo");
 
-        assert_validation_error(update_profile(&fixture.store, profile.id, profile_input("", "x.exe")));
+        assert_validation_error(update_profile(
+            &fixture.store,
+            profile.id,
+            profile_input("", "x.exe"),
+        ));
         assert_eq!(list_profiles(&fixture.store), [profile]);
     }
 
@@ -416,7 +457,11 @@ mod tests {
 
         delete_profile(&fixture.store, &fixture.screenshots, profile.id).unwrap();
 
-        let remaining: Vec<_> = fixture.reloaded().iter().map(|profile| profile.id).collect();
+        let remaining: Vec<_> = fixture
+            .reloaded()
+            .iter()
+            .map(|profile| profile.id)
+            .collect();
         assert_eq!(remaining, [kept.id]);
         assert!(!fixture.screenshots.profile_dir(profile.id).exists());
         assert!(fixture.has_screenshot(kept.id, kept_pixel.id));
@@ -449,7 +494,10 @@ mod tests {
         let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
 
         assert_eq!(tracker.name, "Здоровье");
-        assert_eq!(tracker.pre_action_delay_ms, DelayRange { min: 100, max: 300 });
+        assert_eq!(
+            tracker.pre_action_delay_ms,
+            DelayRange { min: 100, max: 300 }
+        );
         assert_eq!(tracker.resume_delay_ms, 1000);
         assert_eq!(fixture.reloaded()[0].trackers, [tracker]);
     }
@@ -562,7 +610,10 @@ mod tests {
         let second_action = get_action(&fixture.store, profile.id, second.id).unwrap();
         let mut action = get_action(&fixture.store, profile.id, first.id).unwrap();
         let steps = action.kind.clone();
-        action.sound = crate::action::SoundSettings { id: Some("arcade-coin".into()), volume_percent: 35 };
+        action.sound = crate::action::SoundSettings {
+            id: Some("arcade-coin".into()),
+            volume_percent: 35,
+        };
         update_action(&fixture.store, profile.id, first.id, action.clone()).unwrap();
         let reloaded = fixture.reloaded();
         assert_eq!(reloaded[0].trackers[0].action, action);
@@ -579,15 +630,32 @@ mod tests {
         let saved = get_action(&fixture.store, profile.id, tracker.id).unwrap();
         let bytes = fs::read(fixture.dir.path().join("config.json")).unwrap();
         for sound in [
-            crate::action::SoundSettings { id: Some("unknown-sound".into()), volume_percent: 50 },
-            crate::action::SoundSettings { id: Some("soft-ping".into()), volume_percent: 101 },
+            crate::action::SoundSettings {
+                id: Some("unknown-sound".into()),
+                volume_percent: 50,
+            },
+            crate::action::SoundSettings {
+                id: Some("soft-ping".into()),
+                volume_percent: 101,
+            },
         ] {
             let mut action = saved.clone();
             action.sound = sound;
-            assert_validation_error(update_action(&fixture.store, profile.id, tracker.id, action));
-            assert_eq!(get_action(&fixture.store, profile.id, tracker.id).unwrap(), saved);
+            assert_validation_error(update_action(
+                &fixture.store,
+                profile.id,
+                tracker.id,
+                action,
+            ));
+            assert_eq!(
+                get_action(&fixture.store, profile.id, tracker.id).unwrap(),
+                saved
+            );
             assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
-            assert_eq!(fs::read(fixture.dir.path().join("config.json")).unwrap(), bytes);
+            assert_eq!(
+                fs::read(fixture.dir.path().join("config.json")).unwrap(),
+                bytes
+            );
         }
     }
 
@@ -607,7 +675,10 @@ mod tests {
             &fixture.store,
             profile.id,
             tracker.id,
-            key_sequence(&[("KeyQ", None), ("KeyW", Some(DelayRange { min: 600, max: 300 }))]),
+            key_sequence(&[
+                ("KeyQ", None),
+                ("KeyW", Some(DelayRange { min: 600, max: 300 })),
+            ]),
         ));
         assert_eq!(fixture.reloaded()[0].trackers[0].action, key_sequence(&[]));
     }
@@ -618,7 +689,12 @@ mod tests {
         let profile = fixture.profile("Diablo");
 
         assert!(matches!(
-            update_action(&fixture.store, profile.id, Uuid::new_v4(), key_sequence(&[])),
+            update_action(
+                &fixture.store,
+                profile.id,
+                Uuid::new_v4(),
+                key_sequence(&[])
+            ),
             Err(AppError::NotFound(_))
         ));
     }
@@ -675,7 +751,10 @@ mod tests {
 
         assert_eq!(updated.condition, PixelCondition::NotEquals);
         assert_eq!(updated.tolerance_percent, 15);
-        assert_eq!((updated.x, updated.y, updated.color), (pixel.x, pixel.y, pixel.color));
+        assert_eq!(
+            (updated.x, updated.y, updated.color),
+            (pixel.x, pixel.y, pixel.color)
+        );
         assert_eq!(fixture.reloaded()[0].trackers[0].pixels, [updated]);
     }
 
@@ -704,14 +783,26 @@ mod tests {
         let deleted = fixture.pixel(profile.id, tracker.id);
         let kept = fixture.pixel(profile.id, tracker.id);
 
-        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, deleted.id)
-            .unwrap();
+        delete_pixel(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            deleted.id,
+        )
+        .unwrap();
 
         assert!(!fixture.has_screenshot(profile.id, deleted.id));
         assert!(fixture.has_screenshot(profile.id, kept.id));
         assert_eq!(fixture.reloaded()[0].trackers[0].pixels, [kept]);
         assert!(matches!(
-            delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, deleted.id),
+            delete_pixel(
+                &fixture.store,
+                &fixture.screenshots,
+                profile.id,
+                tracker.id,
+                deleted.id
+            ),
             Err(AppError::NotFound(_))
         ));
     }
@@ -720,8 +811,13 @@ mod tests {
     fn complete_tracker(fixture: &Fixture, profile_id: Uuid) -> (Tracker, Pixel) {
         let tracker = create_tracker(&fixture.store, profile_id, "Здоровье".into()).unwrap();
         let pixel = fixture.pixel(profile_id, tracker.id);
-        update_action(&fixture.store, profile_id, tracker.id, key_sequence(&[("KeyQ", None)]))
-            .unwrap();
+        update_action(
+            &fixture.store,
+            profile_id,
+            tracker.id,
+            key_sequence(&[("KeyQ", None)]),
+        )
+        .unwrap();
         (tracker, pixel)
     }
 
@@ -750,10 +846,20 @@ mod tests {
         let profile = fixture.profile("Diablo");
         let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
 
-        assert_validation_error(set_tracker_running(&fixture.store, profile.id, tracker.id, true));
+        assert_validation_error(set_tracker_running(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            true,
+        ));
 
         fixture.pixel(profile.id, tracker.id);
-        assert_validation_error(set_tracker_running(&fixture.store, profile.id, tracker.id, true));
+        assert_validation_error(set_tracker_running(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            true,
+        ));
         assert!(!is_running(&fixture));
         assert!(set_tracker_running(&fixture.store, profile.id, tracker.id, false).is_ok());
     }
@@ -766,10 +872,24 @@ mod tests {
         let second = fixture.pixel(profile.id, tracker.id);
         set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
 
-        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, first.id).unwrap();
+        delete_pixel(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            first.id,
+        )
+        .unwrap();
         assert!(is_running(&fixture));
 
-        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, second.id).unwrap();
+        delete_pixel(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            second.id,
+        )
+        .unwrap();
         assert!(!is_running(&fixture));
     }
 
@@ -780,7 +900,13 @@ mod tests {
         let (tracker, _) = complete_tracker(&fixture, profile.id);
         set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
 
-        update_action(&fixture.store, profile.id, tracker.id, key_sequence(&[("KeyE", None)])).unwrap();
+        update_action(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            key_sequence(&[("KeyE", None)]),
+        )
+        .unwrap();
         assert!(is_running(&fixture));
 
         update_action(&fixture.store, profile.id, tracker.id, key_sequence(&[])).unwrap();
@@ -794,8 +920,13 @@ mod tests {
         let (tracker, _) = complete_tracker(&fixture, profile.id);
         set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
 
-        update_tracker(&fixture.store, profile.id, tracker.id, tracker_input("Мана", 0, 0, 0))
-            .unwrap();
+        update_tracker(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            tracker_input("Мана", 0, 0, 0),
+        )
+        .unwrap();
 
         assert!(is_running(&fixture));
     }
@@ -808,7 +939,14 @@ mod tests {
         let pixel = fixture.pixel(profile.id, tracker.id);
         fs::remove_dir_all(fixture.screenshots.profile_dir(profile.id)).unwrap();
 
-        delete_pixel(&fixture.store, &fixture.screenshots, profile.id, tracker.id, pixel.id).unwrap();
+        delete_pixel(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            pixel.id,
+        )
+        .unwrap();
 
         assert!(fixture.reloaded()[0].trackers[0].pixels.is_empty());
     }

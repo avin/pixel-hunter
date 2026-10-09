@@ -15,17 +15,11 @@ export function isScreenOverlayView(search: string) {
 }
 
 export function ScreenOverlayApp({ store, search }: Props) {
-  const params = new URLSearchParams(search);
-  const profileId = params.get("profileId") ?? "";
-  const pixelId = params.get("pixelId") ?? "";
+  const view = new URLSearchParams(search).get("view");
 
   return (
     <Provider store={store}>
-      {params.get("view") === "picker" ? (
-        <ScreenshotPicker profileId={profileId} pixelId={pixelId} />
-      ) : (
-        <ScreenshotViewer />
-      )}
+      {view === "picker" ? <ScreenshotPicker /> : <ScreenshotViewer />}
     </Provider>
   );
 }

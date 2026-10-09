@@ -204,7 +204,10 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn tracker_json(pre_action_delay_ms: serde_json::Value, resume_delay_ms: i64) -> serde_json::Value {
+    fn tracker_json(
+        pre_action_delay_ms: serde_json::Value,
+        resume_delay_ms: i64,
+    ) -> serde_json::Value {
         json!({
             "id": "6f1b9a52-7f0c-4f0e-9d7b-4a3b1e2c5d6f",
             "name": "Здоровье",
@@ -217,7 +220,10 @@ mod tests {
     fn new_tracker_has_default_timings() {
         let tracker = Tracker::new("Здоровье".into());
 
-        assert_eq!(tracker.pre_action_delay_ms, DelayRange { min: 100, max: 300 });
+        assert_eq!(
+            tracker.pre_action_delay_ms,
+            DelayRange { min: 100, max: 300 }
+        );
         assert_eq!(tracker.resume_delay_ms, 1000);
     }
 
@@ -304,7 +310,10 @@ mod tests {
         assert_eq!(complete.missing_part(), None);
         assert_eq!(without_pixels.missing_part(), Some(MissingPart::Pixels));
         assert_eq!(without_steps.missing_part(), Some(MissingPart::ActionSteps));
-        assert_eq!(Tracker::new("Новое".into()).missing_part(), Some(MissingPart::Pixels));
+        assert_eq!(
+            Tracker::new("Новое".into()).missing_part(),
+            Some(MissingPart::Pixels)
+        );
     }
 
     #[test]
@@ -323,7 +332,16 @@ mod tests {
     #[test]
     fn serializes_pixel_in_camel_case() {
         let id = Uuid::new_v4();
-        let mut pixel = Pixel::new(id, 812, 1040, Rgb { r: 200, g: 30, b: 30 });
+        let mut pixel = Pixel::new(
+            id,
+            812,
+            1040,
+            Rgb {
+                r: 200,
+                g: 30,
+                b: 30,
+            },
+        );
         pixel.condition = PixelCondition::NotEquals;
 
         assert_eq!(
@@ -368,9 +386,13 @@ mod tests {
 
     #[test]
     fn rejects_blank_profile_fields() {
-        assert!(Profile::new("  ".into(), "game.exe".into()).validate().is_err());
+        assert!(Profile::new("  ".into(), "game.exe".into())
+            .validate()
+            .is_err());
         assert!(Profile::new("Diablo".into(), "".into()).validate().is_err());
-        assert!(Profile::new("Diablo".into(), "game.exe".into()).validate().is_ok());
+        assert!(Profile::new("Diablo".into(), "game.exe".into())
+            .validate()
+            .is_ok());
     }
 
     #[test]

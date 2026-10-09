@@ -39,12 +39,35 @@ afterEach(() => {
 });
 
 describe("ScreenOverlayApp picker", () => {
-  const search = "?view=picker&profileId=profile-1&pixelId=pixel-1";
+  const search = "?view=picker";
+  const frame = { profileId: "profile-1", pixelId: "pixel-1" };
   const picker = () =>
     screen.getByRole("application", { name: /Выберите точку на снимке/ });
 
-  it("shows the screenshot of the pixel one to one", async () => {
-    renderOverlay(search, 1.5);
+  async function renderPicker(devicePixelRatio = 1) {
+    const rendered = renderOverlay(search, devicePixelRatio);
+    await waitFor(() => expect(rendered.backend.callsOf("picker_ready")).toHaveLength(1));
+    return rendered;
+  }
+
+  async function showFrame(profileId: string, pixelId: string) {
+    await act(async () => {
+      await emit("screen-overlay://frame", { profileId, pixelId });
+    });
+  }
+
+  it("reports ready while the window is still hidden", async () => {
+    const { backend } = await renderPicker();
+
+    expect(backend.callsOf("screenshots_dir").length).toBeGreaterThan(0);
+    await waitFor(() => expect(backend.callsOf("picker_frame")).toHaveLength(1));
+    expect(backend.state.pickerVisible).toBe(false);
+    expect(screen.queryByRole("img", { name: "Снимок экрана" })).not.toBeInTheDocument();
+  });
+
+  it("shows the screenshot of the pixel one to one after the frame event", async () => {
+    const { backend } = await renderPicker(1.5);
+    await showFrame(frame.profileId, frame.pixelId);
 
     const image = await loadScreenshot(3840, 2160);
 
@@ -53,10 +76,13 @@ describe("ScreenOverlayApp picker", () => {
       expect.stringContaining(encodeURIComponent("C:\\data\\screenshots\\profile-1\\pixel-1.png")),
     );
     expect(image).toHaveStyle({ width: "2560px", height: "1440px" });
+    await waitFor(() => expect(backend.callsOf("picker_frame_drawn")).toEqual([frame]));
+    expect(backend.state.pickerVisible).toBe(true);
   });
 
   it("picks the physical pixel under the cursor", async () => {
-    const { user, backend } = renderOverlay(search, 1.5);
+    const { user, backend } = await renderPicker(1.5);
+    await showFrame(frame.profileId, frame.pixelId);
     await loadScreenshot(3840, 2160);
 
     await user.pointer({
@@ -71,7 +97,8 @@ describe("ScreenOverlayApp picker", () => {
   });
 
   it("picks only once", async () => {
-    const { user, backend } = renderOverlay(search);
+    const { user, backend } = await renderPicker();
+    await showFrame(frame.profileId, frame.pixelId);
     await loadScreenshot(1920, 1080);
 
     await user.pointer({ keys: "[MouseLeft]", target: picker(), coords: { clientX: 5, clientY: 5 } });
@@ -80,23 +107,60 @@ describe("ScreenOverlayApp picker", () => {
     await waitFor(() => expect(backend.callsOf("pixel_capture_pick")).toHaveLength(1));
   });
 
-  it("ignores clicks before the screenshot is shown", async () => {
-    const { user, backend } = renderOverlay(search);
-    await screen.findByRole("img", { name: "Снимок экрана" });
+  it("ignores clicks before the frame is decoded", async () => {
+    const { user, backend } = await renderPicker();
 
     await user.pointer({ keys: "[MouseLeft]", target: picker(), coords: { clientX: 5, clientY: 5 } });
+    expect(backend.callsOf("pixel_capture_pick")).toEqual([]);
 
+    await showFrame(frame.profileId, frame.pixelId);
+    await screen.findByRole("img", { name: "Снимок экрана" });
+    await user.pointer({ keys: "[MouseLeft]", target: picker(), coords: { clientX: 5, clientY: 5 } });
+
+    expect(backend.callsOf("pixel_capture_pick")).toEqual([]);
+    expect(backend.callsOf("picker_frame_drawn")).toEqual([]);
+  });
+
+  it("reports a show error when the screenshot fails to load", async () => {
+    const { user, backend } = await renderPicker();
+    await showFrame(frame.profileId, frame.pixelId);
+    const image = await screen.findByRole("img", { name: "Снимок экрана" });
+
+    fireEvent.error(image);
+
+    await waitFor(() => expect(backend.callsOf("picker_frame_failed")).toEqual([frame]));
+    expect(backend.callsOf("picker_frame_drawn")).toEqual([]);
+    expect(backend.state.pickerVisible).toBe(false);
+    await user.pointer({ keys: "[MouseLeft]", target: picker(), coords: { clientX: 5, clientY: 5 } });
     expect(backend.callsOf("pixel_capture_pick")).toEqual([]);
   });
 
   it("cancels the capture on Escape", async () => {
-    const { user, backend } = renderOverlay(search);
+    const { user, backend } = await renderPicker();
+    await showFrame(frame.profileId, frame.pixelId);
     await loadScreenshot(1920, 1080);
 
     await user.keyboard("{Escape}");
 
     await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toHaveLength(1));
     expect(backend.callsOf("pixel_capture_pick")).toEqual([]);
+  });
+
+  it("replaces the screenshot when a new frame arrives without reloading", async () => {
+    const { user, backend } = await renderPicker();
+    await showFrame(frame.profileId, frame.pixelId);
+    await loadScreenshot(1920, 1080);
+    await waitFor(() => expect(backend.callsOf("picker_frame_drawn")).toEqual([frame]));
+
+    const next = { profileId: "profile-1", pixelId: "pixel-2" };
+    await showFrame(next.profileId, next.pixelId);
+    const image = await loadScreenshot(1920, 1080);
+
+    expect(image).toHaveAttribute("src", expect.stringContaining("pixel-2.png"));
+    expect(backend.callsOf("picker_ready")).toHaveLength(1);
+    expect(screen.getAllByRole("img", { name: "Снимок экрана" })).toHaveLength(1);
+    await user.pointer({ keys: "[MouseLeft]", target: picker(), coords: { clientX: 5, clientY: 5 } });
+    await waitFor(() => expect(backend.callsOf("pixel_capture_pick")).toEqual([{ x: 5, y: 5 }]));
   });
 });
 

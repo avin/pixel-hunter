@@ -113,6 +113,12 @@ export interface TrackerInput {
   resumeDelayMs: number;
 }
 
+/** Frame delivered to the prepared picker page. */
+export interface PickerFrame {
+  profileId: string;
+  pixelId: string;
+}
+
 /** Latest request sent to the reusable screenshot viewer. */
 export interface ScreenshotViewRequest {
   sequence: number;

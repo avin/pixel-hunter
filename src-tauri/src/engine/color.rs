@@ -25,7 +25,11 @@ mod tests {
     use super::*;
     use uuid::Uuid;
 
-    const REFERENCE: Rgb = Rgb { r: 200, g: 30, b: 30 };
+    const REFERENCE: Rgb = Rgb {
+        r: 200,
+        g: 30,
+        b: 30,
+    };
 
     fn pixel(condition: PixelCondition, tolerance_percent: u8) -> Pixel {
         let mut pixel = Pixel::new(Uuid::new_v4(), 0, 0, REFERENCE);
@@ -40,12 +44,18 @@ mod tests {
 
     #[test]
     fn matches_within_tolerance() {
-        assert!(pixel_passes(rgb(225, 10, 50), &pixel(PixelCondition::Equals, 10)));
+        assert!(pixel_passes(
+            rgb(225, 10, 50),
+            &pixel(PixelCondition::Equals, 10)
+        ));
     }
 
     #[test]
     fn one_channel_outside_tolerance_does_not_match() {
-        assert!(!pixel_passes(rgb(200, 30, 57), &pixel(PixelCondition::Equals, 10)));
+        assert!(!pixel_passes(
+            rgb(200, 30, 57),
+            &pixel(PixelCondition::Equals, 10)
+        ));
     }
 
     #[test]
@@ -67,7 +77,10 @@ mod tests {
 
     #[test]
     fn full_tolerance_matches_any_color() {
-        assert!(pixel_passes(rgb(0, 255, 255), &pixel(PixelCondition::Equals, 100)));
+        assert!(pixel_passes(
+            rgb(0, 255, 255),
+            &pixel(PixelCondition::Equals, 100)
+        ));
     }
 
     #[test]

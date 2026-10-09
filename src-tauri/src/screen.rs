@@ -152,8 +152,16 @@ impl PrimaryScreen {
         let staging = self.points_staging(columns)?;
         for (column, source) in point_copies(points) {
             unsafe {
-                self.context
-                    .CopySubresourceRegion(&staging, 0, column, 0, 0, &frame, 0, Some(&source));
+                self.context.CopySubresourceRegion(
+                    &staging,
+                    0,
+                    column,
+                    0,
+                    0,
+                    &frame,
+                    0,
+                    Some(&source),
+                );
             }
         }
         let row = self.read_staging(&staging, columns, 1)?;
@@ -218,7 +226,11 @@ impl PrimaryScreen {
     fn acquire(&mut self, duplication: &IDXGIOutputDuplication) -> windows::core::Result<()> {
         let mut info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut resource = None;
-        let timeout = if self.last_frame.is_some() { 0 } else { FRAME_TIMEOUT_MS };
+        let timeout = if self.last_frame.is_some() {
+            0
+        } else {
+            FRAME_TIMEOUT_MS
+        };
         unsafe { duplication.AcquireNextFrame(timeout, &mut info, &mut resource)? };
         // A frame without a present is a pointer-only update; its surface may hold no desktop image.
         let stored = if info.LastPresentTime == 0 {
@@ -297,7 +309,12 @@ impl PrimaryScreen {
         texture.ok_or_else(|| AppError::Capture("Direct3D не создал текстуру".into()))
     }
 
-    fn read_staging(&self, staging: &ID3D11Texture2D, width: u32, height: u32) -> AppResult<Vec<u8>> {
+    fn read_staging(
+        &self,
+        staging: &ID3D11Texture2D,
+        width: u32,
+        height: u32,
+    ) -> AppResult<Vec<u8>> {
         let row_bytes = width as usize * 4;
         let mut bgra = Vec::with_capacity(row_bytes * height as usize);
         unsafe {
@@ -332,7 +349,9 @@ fn primary_output() -> AppResult<(IDXGIAdapter1, IDXGIOutput1)> {
             adapter_index += 1;
         }
     }
-    Err(AppError::Capture("Основной монитор не найден среди выходов DXGI".into()))
+    Err(AppError::Capture(
+        "Основной монитор не найден среди выходов DXGI".into(),
+    ))
 }
 
 fn texture_desc(texture: &ID3D11Texture2D) -> D3D11_TEXTURE2D_DESC {
@@ -370,8 +389,22 @@ mod tests {
             ],
         };
 
-        assert_eq!(frame.rgb_at(1, 0), Some(Rgb { r: 200, g: 30, b: 30 }));
-        assert_eq!(frame.rgb_at(1, 1), Some(Rgb { r: 0, g: 128, b: 255 }));
+        assert_eq!(
+            frame.rgb_at(1, 0),
+            Some(Rgb {
+                r: 200,
+                g: 30,
+                b: 30
+            })
+        );
+        assert_eq!(
+            frame.rgb_at(1, 1),
+            Some(Rgb {
+                r: 0,
+                g: 128,
+                b: 255
+            })
+        );
         assert_eq!(frame.rgb_at(2, 0), None);
         assert_eq!(frame.rgb_at(0, 2), None);
         assert_eq!(
@@ -384,7 +417,10 @@ mod tests {
     fn copies_each_point_into_its_own_column() {
         let copies: Vec<_> = point_copies(&[(812, 1040), (0, 0), (3839, 2159)])
             .map(|(column, source)| {
-                (column, (source.left, source.top, source.right, source.bottom))
+                (
+                    column,
+                    (source.left, source.top, source.right, source.bottom),
+                )
             })
             .collect();
 
@@ -408,12 +444,24 @@ mod tests {
         let frame = screen.capture_frame().unwrap();
         let path = std::env::temp_dir().join("pixel-hunter-primary-screen.png");
         frame.to_rgb_image().save(&path).unwrap();
-        println!("{}×{} saved to {}", frame.width, frame.height, path.display());
+        println!(
+            "{}×{} saved to {}",
+            frame.width,
+            frame.height,
+            path.display()
+        );
 
         // Corners rarely change between the two reads, unlike the middle of the screen.
-        let points = [(0, 0), (frame.width - 1, 0), (frame.width - 1, frame.height - 1)];
+        let points = [
+            (0, 0),
+            (frame.width - 1, 0),
+            (frame.width - 1, frame.height - 1),
+        ];
         let colors = screen.read_pixels(&points).unwrap();
-        let expected: Vec<_> = points.iter().map(|&(x, y)| frame.rgb_at(x, y).unwrap()).collect();
+        let expected: Vec<_> = points
+            .iter()
+            .map(|&(x, y)| frame.rgb_at(x, y).unwrap())
+            .collect();
         assert_eq!(colors, expected);
     }
 }

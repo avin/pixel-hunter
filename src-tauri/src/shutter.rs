@@ -10,13 +10,23 @@ const DURATION_MS: u32 = 150;
 /// Start of each click and its decay time constant, in milliseconds.
 const CLICKS: [(f32, f32); 2] = [(0.0, 9.0), (70.0, 14.0)];
 
+static WAV: OnceLock<Vec<u8>> = OnceLock::new();
+
+/// Builds the shutter buffer ahead of the snapshot. Playback is [`play`].
+pub fn prepare() {
+    let _ = prepared_wav();
+}
+
 pub fn play() {
-    static WAV: OnceLock<Vec<u8>> = OnceLock::new();
-    let wav = WAV.get_or_init(shutter_wav);
+    let wav = prepared_wav();
     // SND_ASYNC keeps reading the buffer after returning; the static outlives playback.
     unsafe {
         let _ = PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_ASYNC);
     }
+}
+
+fn prepared_wav() -> &'static [u8] {
+    WAV.get_or_init(shutter_wav)
 }
 
 fn shutter_wav() -> Vec<u8> {
@@ -71,6 +81,12 @@ mod tests {
 
     fn u32_at(bytes: &[u8], offset: usize) -> u32 {
         u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+    }
+
+    #[test]
+    fn prepare_matches_synthesis_without_an_audio_device() {
+        prepare();
+        assert_eq!(prepared_wav(), shutter_wav().as_slice());
     }
 
     #[test]

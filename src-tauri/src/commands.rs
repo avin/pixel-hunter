@@ -198,11 +198,12 @@ pub fn pixel_capture_start(
     Ok(())
 }
 
-/// Without a running session there is nobody to close a leftover picker, so it is closed here.
+/// Without a running session there is nobody to hide a leftover picker, so it is hidden here.
+/// The warmed window stays alive for the next capture.
 #[tauri::command]
 pub fn pixel_capture_cancel(app: AppHandle, capture: State<'_, PixelCapture>) {
     if capture.send(CaptureCommand::Cancel).is_err() {
-        screen_overlay::close(&app);
+        screen_overlay::hide(&app);
     }
 }
 

@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use windows::Win32::Media::{timeBeginPeriod, timeEndPeriod};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY,
-    KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, VIRTUAL_KEY,
+    SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP,
+    KEYEVENTF_SCANCODE, VIRTUAL_KEY,
 };
 
 use crate::action::{Action, ActionKind};
@@ -37,7 +37,10 @@ impl InputSink for SendInputSink {
         };
         let sent = unsafe { SendInput(&[input], size_of::<INPUT>() as i32) };
         if sent == 0 {
-            eprintln!("SendInput не отправил {event:?}: {}", windows::core::Error::from_thread());
+            eprintln!(
+                "SendInput не отправил {event:?}: {}",
+                windows::core::Error::from_thread()
+            );
         }
     }
 }

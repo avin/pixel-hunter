@@ -76,7 +76,9 @@ mod tests {
 
     impl InputSink for FakeInput<'_> {
         fn send(&mut self, event: KeyEvent) {
-            self.0.borrow_mut().push(Entry::Key(event.scan_code, event.is_up));
+            self.0
+                .borrow_mut()
+                .push(Entry::Key(event.scan_code, event.is_up));
         }
     }
 
@@ -100,7 +102,8 @@ mod tests {
                 .enumerate()
                 .map(|(index, key)| KeyStep {
                     id: Uuid::new_v4(),
-                    delay_before_ms: (index > 0).then_some(crate::config::DelayRange { min: 0, max: 0 }),
+                    delay_before_ms: (index > 0)
+                        .then_some(crate::config::DelayRange { min: 0, max: 0 }),
                     combo: KeyCombo {
                         modifiers: vec![],
                         key: (*key).into(),
@@ -140,7 +143,12 @@ mod tests {
             |action| {
                 super::super::play_action(
                     action,
-                    |sound| log.borrow_mut().push(Entry::Sound(sound.id.clone().unwrap(), sound.volume_percent)),
+                    |sound| {
+                        log.borrow_mut().push(Entry::Sound(
+                            sound.id.clone().unwrap(),
+                            sound.volume_percent,
+                        ))
+                    },
                     |action| {
                         let ActionKind::KeySequence(sequence) = &action.kind;
                         execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
@@ -166,15 +174,24 @@ mod tests {
     #[test]
     fn sound_starts_once_before_keys_and_done_does_not_wait_for_audio() {
         let entries = run_jobs(
-            vec![job(1, with_sound(keys(&["KeyQ", "KeyW"]), "double-tap", 40))],
+            vec![job(
+                1,
+                with_sound(keys(&["KeyQ", "KeyW"]), "double-tap", 40),
+            )],
             &CancelledJobs::default(),
             None,
         );
-        assert_eq!(entries, [
-            Entry::Sound("double-tap".into(), 40),
-            Entry::Key(Q, false), Entry::Key(Q, true),
-            Entry::Key(W, false), Entry::Key(W, true), Entry::Done(1),
-        ]);
+        assert_eq!(
+            entries,
+            [
+                Entry::Sound("double-tap".into(), 40),
+                Entry::Key(Q, false),
+                Entry::Key(Q, true),
+                Entry::Key(W, false),
+                Entry::Key(W, true),
+                Entry::Done(1),
+            ]
+        );
     }
 
     #[test]
@@ -187,24 +204,40 @@ mod tests {
                 job(2, with_sound(keys(&["KeyW"]), "soft-ping", 0)),
                 job(3, keys(&["KeyE"])),
             ],
-            &cancelled, None,
+            &cancelled,
+            None,
         );
-        assert_eq!(entries, [
-            Entry::Key(W, false), Entry::Key(W, true), Entry::Done(2),
-            Entry::Key(E, false), Entry::Key(E, true), Entry::Done(3),
-        ]);
+        assert_eq!(
+            entries,
+            [
+                Entry::Key(W, false),
+                Entry::Key(W, true),
+                Entry::Done(2),
+                Entry::Key(E, false),
+                Entry::Key(E, true),
+                Entry::Done(3),
+            ]
+        );
     }
 
     #[test]
     fn cancellation_during_capture_pause_skips_the_sound_callback() {
         let (sender, receiver) = mpsc::channel();
-        sender.send(job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50))).unwrap();
+        sender
+            .send(job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50)))
+            .unwrap();
         drop(sender);
         let paused = AtomicBool::new(true);
         let cancelled = CancelledJobs::default();
-        run(receiver, &cancelled, &paused,
+        run(
+            receiver,
+            &cancelled,
+            &paused,
             |_| panic!("cancelled action must not submit sound or keys"),
-            |_| { cancelled.cancel([1]); paused.store(false, Ordering::SeqCst); },
+            |_| {
+                cancelled.cancel([1]);
+                paused.store(false, Ordering::SeqCst);
+            },
             |_| panic!("cancelled job must not finish as played"),
         );
     }
@@ -214,23 +247,37 @@ mod tests {
         let audio = crate::action_sound::AudioService::unavailable_for_test();
         assert!(audio.preview("soft-ping", 50).is_err());
         let (sender, receiver) = mpsc::channel();
-        sender.send(job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50))).unwrap();
+        sender
+            .send(job(1, with_sound(keys(&["KeyQ"]), "soft-ping", 50)))
+            .unwrap();
         drop(sender);
         let log = Log::default();
-        let sleeper = FakeSleeper { on_first_sleep: RefCell::new(None) };
+        let sleeper = FakeSleeper {
+            on_first_sleep: RefCell::new(None),
+        };
         let mut rng = StdRng::seed_from_u64(0);
-        run(receiver, &CancelledJobs::default(), &AtomicBool::new(false),
-            |action| super::super::play_action(action,
-                |sound| audio.play_runtime(sound),
-                |action| {
-                    let ActionKind::KeySequence(sequence) = &action.kind;
-                    execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
-                }),
+        run(
+            receiver,
+            &CancelledJobs::default(),
+            &AtomicBool::new(false),
+            |action| {
+                super::super::play_action(
+                    action,
+                    |sound| audio.play_runtime(sound),
+                    |action| {
+                        let ActionKind::KeySequence(sequence) = &action.kind;
+                        execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
+                    },
+                )
+            },
             |_| {},
             |ticket| log.borrow_mut().push(Entry::Done(ticket)),
         );
         audio.shutdown();
-        assert_eq!(log.take(), [Entry::Key(Q, false), Entry::Key(Q, true), Entry::Done(1)]);
+        assert_eq!(
+            log.take(),
+            [Entry::Key(Q, false), Entry::Key(Q, true), Entry::Done(1)]
+        );
     }
 
     #[test]
@@ -267,7 +314,10 @@ mod tests {
             None,
         );
 
-        assert_eq!(entries, [Entry::Key(E, false), Entry::Key(E, true), Entry::Done(2)]);
+        assert_eq!(
+            entries,
+            [Entry::Key(E, false), Entry::Key(E, true), Entry::Done(2)]
+        );
     }
 
     #[test]
