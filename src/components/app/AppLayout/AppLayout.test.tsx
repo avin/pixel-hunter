@@ -33,6 +33,7 @@ describe("workspace navigation", () => {
       "page",
     );
     expect(screen.queryByRole("link", { name: "Обзор" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Создать профиль в навигации" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Изменить профиль «Diablo» в навигации" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Удалить профиль «Diablo» в навигации" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Создать отслеживание в профиле «Diablo»" })).not.toBeInTheDocument();

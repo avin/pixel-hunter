@@ -1,5 +1,6 @@
 import { Plus } from "lucide-react";
 import { useState } from "react";
+import { FieldInfo } from "@/components/pages/TrackerPage/TrackerForm/FieldInfo/FieldInfo";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -85,7 +86,14 @@ export function KeySequenceEditor({ action, onChange }: Props) {
               <TableRow>
                 <TableHead className="w-10">№</TableHead>
                 <TableHead>Сочетание</TableHead>
-                <TableHead className="w-52">Задержка, мс</TableHead>
+                <TableHead className="w-52">
+                  <span className="inline-flex items-center gap-1">
+                    Задержка, мс
+                    <FieldInfo label="Задержка перед нажатием">
+                      Перед каждым нажатием, кроме первого, выдерживается случайная пауза из этого диапазона.
+                    </FieldInfo>
+                  </span>
+                </TableHead>
                 <TableHead className="w-36"><span className="sr-only">Команды</span></TableHead>
               </TableRow>
             </TableHeader>

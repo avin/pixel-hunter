@@ -1,8 +1,11 @@
 import { matchPath } from "react-router-dom";
 import type { LastScreen, Profile } from "@/store/types";
-import { PROFILE_ROUTE, TRACKER_ROUTE, profilePath, trackerPath } from "./paths";
+import { PROFILE_ROUTE, TRACKER_ROUTE, profilePath } from "./paths";
 
-/** Route to open on startup. An unknown profile or a failed read falls back to the list. */
+/**
+ * Route to open on startup. A saved tracker editor reopens its profile.
+ * An unknown profile or a failed read falls back to the list.
+ */
 export function initialPath(
   lastScreen: LastScreen | undefined,
   profiles: readonly Profile[],
@@ -10,10 +13,7 @@ export function initialPath(
   if (!lastScreen || lastScreen.kind === "profiles") return "/";
   const profile = profiles.find((item) => item.id === lastScreen.profileId);
   if (!profile) return "/";
-  if (lastScreen.kind === "profile") return profilePath(profile.id);
-  const tracker = profile.trackers.find((item) => item.id === lastScreen.trackerId);
-  if (!tracker) return profilePath(profile.id);
-  return trackerPath(profile.id, tracker.id);
+  return profilePath(profile.id);
 }
 
 export function screenFromPath(pathname: string): LastScreen {

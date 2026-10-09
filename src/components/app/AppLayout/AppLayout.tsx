@@ -35,10 +35,10 @@ export function AppLayout() {
             {backTo && (
               <Link
                 to={backTo}
-                className={buttonVariants({ variant: "ghost", size: "sm" })}
+                aria-label="Назад"
+                className={buttonVariants({ variant: "ghost", size: "icon-sm" })}
               >
                 <ArrowLeft />
-                Назад
               </Link>
             )}
             <h1 className="truncate font-heading text-sm font-medium">

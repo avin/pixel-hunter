@@ -72,6 +72,19 @@ describe("KeySequenceEditor", () => {
     expect(delayInput(3, "максимум")).toHaveValue(200);
   });
 
+  it("explains the step delay only after activating its info button", async () => {
+    const { user } = await openTracker([q, w]);
+    const description =
+      "Перед каждым нажатием, кроме первого, выдерживается случайная пауза из этого диапазона.";
+    const info = screen.getByRole("button", { name: "Информация: Задержка перед нажатием" });
+
+    expect(screen.queryByText(description)).not.toBeInTheDocument();
+    await user.hover(info);
+    expect(screen.queryByText(description)).not.toBeInTheDocument();
+    await user.click(info);
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(description);
+  });
+
   it("shows an empty sequence as not configured", async () => {
     await openTracker();
 

@@ -109,7 +109,7 @@ export interface Profile {
   trackers: Tracker[];
 }
 
-/** Screen open when the app last quit. Missing data means the profile list. */
+/** Screen open when the app last quit. Startup opens the named profile, never a tracker editor. Missing data means the profile list. */
 export type LastScreen =
   | { kind: "profiles" }
   | { kind: "profile"; profileId: string }

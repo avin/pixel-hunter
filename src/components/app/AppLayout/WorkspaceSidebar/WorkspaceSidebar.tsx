@@ -1,18 +1,11 @@
-import {
-  ChevronDown,
-  ChevronRight,
-  List,
-  Plus,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, List } from "lucide-react";
 import { cn } from "cn";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { profilePath, trackerPath } from "@/components/app/AppRouter/paths";
-import { ProfileDialog } from "@/components/pages/ProfilesPage/ProfileDialog/ProfileDialog";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useListProfilesQuery } from "@/store/api";
-import type { Profile } from "@/store/types";
 
 interface Props {
   profileId?: string;
@@ -28,21 +21,11 @@ export function WorkspaceSidebar({ profileId, trackerId, isLeaving }: Props) {
   const [expandedProfiles, setExpandedProfiles] = useState<
     Record<string, boolean>
   >({});
-  const [editedProfile, setEditedProfile] = useState<{ profile?: Profile }>();
 
   return (
     <aside className="flex w-48 shrink-0 flex-col border-r bg-sidebar text-sidebar-foreground md:w-52">
-      <div className="flex h-10 shrink-0 items-center justify-between border-b px-2">
+      <div className="flex h-10 shrink-0 items-center border-b px-2">
         <span className="font-medium">Pixel Hunter</span>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Создать профиль в навигации"
-          disabled={isLeaving}
-          onClick={() => setEditedProfile({})}
-        >
-          <Plus />
-        </Button>
       </div>
       <nav
         aria-label="Профили и отслеживания"
@@ -144,12 +127,6 @@ export function WorkspaceSidebar({ profileId, trackerId, isLeaving }: Props) {
           );
         })}
       </nav>
-      {editedProfile && (
-        <ProfileDialog
-          profile={editedProfile.profile}
-          onClose={() => setEditedProfile(undefined)}
-        />
-      )}
     </aside>
   );
 }

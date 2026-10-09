@@ -56,7 +56,7 @@ describe("restored screen", () => {
     expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
   });
 
-  it("opens a saved tracker editor", async () => {
+  it("opens the profile when a tracker editor was saved", async () => {
     const backend = createFakeBackend({
       profiles: [diablo],
       settings: {
@@ -66,7 +66,8 @@ describe("restored screen", () => {
     });
     renderRestoredApp(backend);
 
-    expect(await screen.findByRole("heading", { level: 1, name: "Здоровье" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: "Diablo" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { level: 1, name: "Здоровье" })).not.toBeInTheDocument();
     await waitFor(() =>
       expect(backend.callsOf("engine_activate")).toEqual([{ profileId: "diablo", epoch: 1 }]),
     );
