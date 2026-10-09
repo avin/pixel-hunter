@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import type { Action, ActionType } from "@/store/types";
 import { KeySequenceEditor } from "./KeySequenceEditor/KeySequenceEditor";
+import { NetworkDisconnectEditor } from "./NetworkDisconnectEditor/NetworkDisconnectEditor";
 
 type ActionOf<T extends ActionType> = Extract<Action, { type: T }>;
 
@@ -17,11 +18,16 @@ interface ActionTypeDefinition<T extends ActionType> {
   Editor: ComponentType<ActionEditorProps<T>>;
 }
 
-/** A new action type is a new `Action` variant plus an entry here. */
+/** A new action type is a new `Action` variant, an entry here, and an arm in `ActionEditor`. */
 export const actionTypes: { [T in ActionType]: ActionTypeDefinition<T> } = {
   keySequence: {
     label: "Нажатие клавиш",
     createDefault: () => ({ type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } }),
     Editor: KeySequenceEditor,
+  },
+  networkDisconnect: {
+    label: "Разрыв сетевого соединения",
+    createDefault: () => ({ type: "networkDisconnect", sound: { id: null, volumePercent: 50 } }),
+    Editor: NetworkDisconnectEditor,
   },
 };

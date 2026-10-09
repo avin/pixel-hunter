@@ -215,6 +215,7 @@ impl Session {
             self.screen = None;
         }
 
+        let process_name = self.process_name.clone();
         let Self {
             core,
             screen,
@@ -225,6 +226,7 @@ impl Session {
         core.tick(
             now,
             paused,
+            &process_name,
             |points| {
                 if !game_active {
                     return None;

@@ -8,6 +8,7 @@ import {
   trackerFixture,
   pixelFixture,
   keyStepFixture,
+  keySequenceSteps,
 } from "@/test/fakeBackend";
 import { renderApp } from "@/test/renderApp";
 
@@ -411,7 +412,7 @@ describe("TrackerPage", () => {
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].pixels[0].tolerancePercent).toBe(25));
     await user.click(screen.getByRole("button", { name: "Добавить нажатие" }));
     await user.keyboard("w");
-    await waitFor(() => expect(backend.state.profiles[0].trackers[0].action.steps).toHaveLength(2));
+    await waitFor(() => expect(keySequenceSteps(backend.state.profiles[0].trackers[0].action)).toHaveLength(2));
     await user.click(screen.getByRole("button", { name: /^Старт отслеживания/ }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true));
     expect(nameInput()).toHaveValue("Здоровье новый");

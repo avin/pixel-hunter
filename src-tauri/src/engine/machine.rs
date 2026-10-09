@@ -14,6 +14,8 @@ use crate::config::{Rgb, Tracker};
 pub struct Job {
     pub ticket: u64,
     pub tracker_id: Uuid,
+    /// Profile process name at the moment this job was queued.
+    pub process_name: String,
     pub action: Action,
 }
 
@@ -73,10 +75,12 @@ impl EngineCore {
     /// One poll: `read` gets the points of all polling trackers and returns their colors, or
     /// `None` when the game is not active or the screen is unavailable. While `paused` nothing is
     /// read and no job is queued; elapsed pre-action delays wait for the pause to end.
+    /// `process_name` is copied onto every job this tick queues.
     pub fn tick(
         &mut self,
         now: Duration,
         paused: bool,
+        process_name: &str,
         read: impl FnOnce(&[(u32, u32)]) -> Option<Vec<Rgb>>,
         rng: &mut impl Rng,
     ) -> Vec<Job> {
@@ -102,6 +106,7 @@ impl EngineCore {
                     jobs.push(Job {
                         ticket,
                         tracker_id: run.tracker.id,
+                        process_name: process_name.to_string(),
                         action: run.tracker.action.clone(),
                     });
                 }
@@ -230,6 +235,7 @@ mod tests {
         paused: bool,
         screen_fails: bool,
         reads: Vec<Vec<(u32, u32)>>,
+        process_name: String,
     }
 
     impl Harness {
@@ -244,6 +250,7 @@ mod tests {
                 paused: false,
                 screen_fails: false,
                 reads: Vec::new(),
+                process_name: "game.exe".into(),
             }
         }
 
@@ -261,10 +268,12 @@ mod tests {
                 paused,
                 screen_fails,
                 reads,
+                process_name,
             } = self;
             core.tick(
                 now,
                 *paused,
+                process_name,
                 |points| {
                     if !*game_active || *screen_fails {
                         return None;
@@ -566,7 +575,9 @@ mod tests {
         h.paint((1, 1), RED);
         h.tick(ms(0));
 
-        let ActionKind::KeySequence(sequence) = &mut health.action.kind;
+        let ActionKind::KeySequence(sequence) = &mut health.action.kind else {
+            panic!("fixture action is a key sequence");
+        };
         sequence.steps[0].combo.key = "KeyW".into();
         h.core.set_trackers(&[health.clone()]);
 
@@ -698,6 +709,18 @@ mod tests {
     }
 
     #[test]
+    fn queued_job_keeps_the_process_name_passed_to_tick() {
+        let mut h = Harness::new(&[tracker(&[(1, 1)], (0, 0), 0)]);
+        h.process_name = "Game.EXE".into();
+        h.paint((1, 1), RED);
+
+        let jobs = h.tick(ms(0));
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].process_name, "Game.EXE");
+    }
+
+    #[test]
     fn ignores_a_read_with_a_wrong_number_of_colors() {
         let mut core = EngineCore::default();
         core.set_trackers(&[tracker(&[(1, 1), (2, 2)], (0, 0), 0)]);
@@ -705,6 +728,7 @@ mod tests {
         let jobs = core.tick(
             ms(0),
             false,
+            "game.exe",
             |_| Some(vec![RED]),
             &mut StdRng::seed_from_u64(0),
         );

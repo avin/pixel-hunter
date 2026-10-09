@@ -413,6 +413,37 @@ mod tests {
     }
 
     #[test]
+    fn network_disconnect_with_pixels_is_complete_and_an_empty_sequence_is_not() {
+        use crate::action::ActionKind;
+        let mut disconnect = complete_tracker();
+        disconnect.action.kind = ActionKind::NetworkDisconnect;
+        let mut empty_sequence = complete_tracker();
+        empty_sequence.action = Action::default();
+
+        assert_eq!(disconnect.missing_part(), None);
+        assert!(disconnect.is_complete());
+        assert_eq!(
+            empty_sequence.missing_part(),
+            Some(MissingPart::ActionSteps)
+        );
+        assert!(!empty_sequence.is_complete());
+    }
+
+    #[test]
+    fn running_tracker_stops_when_the_action_becomes_an_empty_sequence() {
+        use crate::action::ActionKind;
+        let mut tracker = complete_tracker();
+        tracker.is_running = true;
+        tracker.action.kind = ActionKind::NetworkDisconnect;
+        tracker.stop_if_incomplete();
+        assert!(tracker.is_running);
+
+        tracker.action = Action::default();
+        tracker.stop_if_incomplete();
+        assert!(!tracker.is_running);
+    }
+
+    #[test]
     fn tracker_is_complete_with_pixels_and_action_steps() {
         let complete = complete_tracker();
         let mut without_pixels = complete.clone();

@@ -13,13 +13,15 @@ use std::thread;
 use serde::Serialize;
 use uuid::Uuid;
 
-use crate::action::Action;
+use crate::action::{Action, ActionKind};
 use crate::action_sound::AudioService;
 use crate::config::Config;
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::keyboard;
+use crate::network;
 use executor::CancelledJobs;
+use machine::Job;
 use poller::{Command, Poller};
 
 pub const STATUS_EVENT: &str = "engine://status";
@@ -114,11 +116,11 @@ impl Engine {
                 job_receiver,
                 &executor_cancelled,
                 &executor_paused,
-                |action| {
+                |job| {
                     play_action(
-                        action,
+                        job,
                         |sound| audio.play_runtime(sound),
-                        keyboard::run_action,
+                        |job| perform_action(&job.action, &job.process_name),
                     );
                 },
                 thread::sleep,
@@ -230,17 +232,28 @@ impl Engine {
     }
 }
 
-/// Called only after executor cancellation and capture-pause checks. Audio submission
-/// does not wait for playback, so key completion still controls ActionDone.
-fn play_action(
-    action: &Action,
-    mut sound: impl FnMut(&crate::action::SoundSettings),
-    keys: impl FnOnce(&Action) -> AppResult<()>,
-) {
-    if action.sound.id.is_some() && action.sound.volume_percent > 0 {
-        sound(&action.sound);
+/// Plays a key sequence, or disconnects TCP using the process name stored on the job.
+pub(crate) fn perform_action(action: &Action, process_name: &str) -> AppResult<()> {
+    match &action.kind {
+        ActionKind::KeySequence(sequence) => keyboard::run_action(sequence),
+        ActionKind::NetworkDisconnect => {
+            network::disconnect(process_name);
+            Ok(())
+        }
     }
-    if let Err(error) = keys(action) {
+}
+
+/// Called only after executor cancellation and capture-pause checks. Audio submission
+/// does not wait for playback, so action completion still controls ActionDone.
+fn play_action(
+    job: &Job,
+    mut sound: impl FnMut(&crate::action::SoundSettings),
+    perform: impl FnOnce(&Job) -> AppResult<()>,
+) {
+    if job.action.sound.id.is_some() && job.action.sound.volume_percent > 0 {
+        sound(&job.action.sound);
+    }
+    if let Err(error) = perform(job) {
         eprintln!("Действие не выполнено: {error}");
     }
 }

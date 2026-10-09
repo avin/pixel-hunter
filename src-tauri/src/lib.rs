@@ -10,6 +10,7 @@ mod hotkey;
 mod key_codes;
 mod key_sequence;
 mod keyboard;
+mod network;
 mod pixel_capture;
 mod processes;
 mod profiles;

@@ -64,9 +64,16 @@ export interface ActionSoundInfo {
   name: string;
 }
 
-export type Action = { type: "keySequence"; steps: KeyStep[]; sound: SoundSettings };
+export type Action =
+  | { type: "keySequence"; steps: KeyStep[]; sound: SoundSettings }
+  | { type: "networkDisconnect"; sound: SoundSettings };
 
 export type ActionType = Action["type"];
+
+/** A key sequence with no steps is not configured. Network disconnect has no fields of its own. */
+export function actionIsEmpty(action: Action): boolean {
+  return action.type === "keySequence" && action.steps.length === 0;
+}
 
 export interface KeyCodeInfo {
   code: string;
@@ -80,7 +87,7 @@ export interface Tracker {
   resumeDelayMs: number;
   pixels: Pixel[];
   action: Action;
-  /** Saved choice of the user; only a tracker with pixels and action steps can be running. */
+  /** Saved choice of the user; only a complete tracker can be running. */
   isRunning: boolean;
 }
 

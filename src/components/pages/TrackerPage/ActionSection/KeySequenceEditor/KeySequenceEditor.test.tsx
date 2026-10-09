@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { KeyStep } from "@/store/types";
 import {
   createFakeBackend,
+  keySequenceSteps,
   keyStepFixture,
   profileFixture,
   trackerFixture,
@@ -26,7 +27,7 @@ async function openTracker(steps: KeyStep[] = []) {
 }
 
 const savedSteps = (backend: ReturnType<typeof createFakeBackend>) =>
-  backend.state.profiles[0].trackers[0].action.steps;
+  keySequenceSteps(backend.state.profiles[0].trackers[0].action);
 const stepItems = () =>
   within(screen.getByRole("table", { name: "Шаги последовательности" })).getAllByRole(
     "row",

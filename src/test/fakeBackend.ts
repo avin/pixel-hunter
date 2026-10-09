@@ -1,4 +1,5 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { actionIsEmpty } from "@/store/types";
 import type {
   Action,
   ActionSoundInfo,
@@ -104,7 +105,7 @@ export function createFakeBackend({
 
   const missingPart = (tracker: Tracker) => {
     if (tracker.pixels.length === 0) return "Добавьте пиксель, чтобы запустить отслеживание";
-    if (tracker.action.steps.length === 0) {
+    if (actionIsEmpty(tracker.action)) {
       return "Добавьте шаг действия, чтобы запустить отслеживание";
     }
     return undefined;
@@ -174,7 +175,7 @@ export function createFakeBackend({
         const tracker = findTracker(args.profileId, args.trackerId);
         const action = structuredClone(args.action as Action);
         validateSound(action.sound.id, action.sound.volumePercent);
-        if (action.steps[0]) action.steps[0].delayBeforeMs = null;
+        if (action.type === "keySequence" && action.steps[0]) action.steps[0].delayBeforeMs = null;
         tracker.action = action;
         stopIfIncomplete(tracker);
         return structuredClone(action);
@@ -321,6 +322,13 @@ export function createFakeBackend({
 }
 
 export type FakeBackend = ReturnType<typeof createFakeBackend>;
+
+export function keySequenceSteps(action: Action): KeyStep[] {
+  if (action.type !== "keySequence") {
+    throw new Error(`expected key sequence, got ${action.type}`);
+  }
+  return action.steps;
+}
 
 export function profileFixture(overrides: Partial<Profile> = {}): Profile {
   return {

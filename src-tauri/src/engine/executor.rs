@@ -7,7 +7,6 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
 use super::machine::Job;
-use crate::action::Action;
 
 const PAUSE_CHECK_INTERVAL: Duration = Duration::from_millis(10);
 
@@ -35,7 +34,7 @@ pub fn run(
     jobs: Receiver<Job>,
     cancelled: &CancelledJobs,
     paused: &AtomicBool,
-    mut play: impl FnMut(&Action),
+    mut play: impl FnMut(&Job),
     sleep: impl Fn(Duration),
     mut done: impl FnMut(u64),
 ) {
@@ -46,7 +45,7 @@ pub fn run(
         if cancelled.take(job.ticket) {
             continue;
         }
-        play(&job.action);
+        play(&job);
         cancelled.take(job.ticket);
         done(job.ticket);
     }
@@ -55,7 +54,7 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{ActionKind, KeyCombo, KeySequenceAction, KeyStep};
+    use crate::action::{Action, ActionKind, KeyCombo, KeySequenceAction, KeyStep};
     use crate::key_sequence::{execute_key_sequence, InputSink, KeyEvent, Sleeper};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
@@ -67,6 +66,7 @@ mod tests {
     enum Entry {
         Sound(String, u8),
         Key(u16, bool),
+        Disconnect(String),
         Done(u64),
     }
 
@@ -117,6 +117,7 @@ mod tests {
         Job {
             ticket,
             tracker_id: Uuid::new_v4(),
+            process_name: String::new(),
             action,
         }
     }
@@ -140,18 +141,26 @@ mod tests {
             receiver,
             cancelled,
             &AtomicBool::new(false),
-            |action| {
+            |job| {
                 super::super::play_action(
-                    action,
+                    job,
                     |sound| {
                         log.borrow_mut().push(Entry::Sound(
                             sound.id.clone().unwrap(),
                             sound.volume_percent,
                         ))
                     },
-                    |action| {
-                        let ActionKind::KeySequence(sequence) = &action.kind;
-                        execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
+                    |job| match &job.action.kind {
+                        ActionKind::KeySequence(sequence) => {
+                            execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
+                        }
+                        ActionKind::NetworkDisconnect => {
+                            log.borrow_mut()
+                                .push(Entry::Disconnect(job.process_name.clone()));
+                            Err(crate::error::AppError::Validation(
+                                "обрыв не выполнен".into(),
+                            ))
+                        }
                     },
                 );
             },
@@ -190,6 +199,33 @@ mod tests {
                 Entry::Key(W, false),
                 Entry::Key(W, true),
                 Entry::Done(1),
+            ]
+        );
+    }
+
+    #[test]
+    fn network_disconnect_plays_sound_once_without_keys_and_still_finishes() {
+        let mut queued = job(
+            4,
+            with_sound(
+                Action {
+                    kind: ActionKind::NetworkDisconnect,
+                    sound: Default::default(),
+                },
+                "arcade-coin",
+                80,
+            ),
+        );
+        queued.process_name = "Game.exe".into();
+
+        let entries = run_jobs(vec![queued], &CancelledJobs::default(), None);
+
+        assert_eq!(
+            entries,
+            [
+                Entry::Sound("arcade-coin".into(), 80),
+                Entry::Disconnect("Game.exe".into()),
+                Entry::Done(4),
             ]
         );
     }
@@ -260,12 +296,14 @@ mod tests {
             receiver,
             &CancelledJobs::default(),
             &AtomicBool::new(false),
-            |action| {
+            |job| {
                 super::super::play_action(
-                    action,
+                    job,
                     |sound| audio.play_runtime(sound),
-                    |action| {
-                        let ActionKind::KeySequence(sequence) = &action.kind;
+                    |job| {
+                        let ActionKind::KeySequence(sequence) = &job.action.kind else {
+                            panic!("expected a key sequence");
+                        };
                         execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
                     },
                 )
@@ -392,12 +430,14 @@ mod tests {
             receiver,
             &CancelledJobs::default(),
             &paused,
-            |action| {
+            |job| {
                 super::super::play_action(
-                    action,
+                    job,
                     |_| {},
-                    |action| {
-                        let ActionKind::KeySequence(sequence) = &action.kind;
+                    |job| {
+                        let ActionKind::KeySequence(sequence) = &job.action.kind else {
+                            panic!("expected a key sequence");
+                        };
                         execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
                     },
                 );

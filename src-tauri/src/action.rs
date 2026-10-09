@@ -19,6 +19,7 @@ pub struct Action {
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ActionKind {
     KeySequence(KeySequenceAction),
+    NetworkDisconnect,
 }
 
 impl Default for ActionKind {
@@ -70,17 +71,20 @@ impl Action {
     pub fn normalize(&mut self) {
         match &mut self.kind {
             ActionKind::KeySequence(action) => action.normalize(),
+            ActionKind::NetworkDisconnect => {}
         }
     }
     pub fn validate(&self) -> AppResult<()> {
         self.sound.validate()?;
         match &self.kind {
             ActionKind::KeySequence(action) => action.validate(),
+            ActionKind::NetworkDisconnect => Ok(()),
         }
     }
     pub fn is_empty(&self) -> bool {
         match &self.kind {
             ActionKind::KeySequence(action) => action.steps.is_empty(),
+            ActionKind::NetworkDisconnect => false,
         }
     }
 }
@@ -326,6 +330,82 @@ mod tests {
         let action = sequence(vec![step("MetaLeft", vec![], None)]);
 
         assert!(matches!(action.validate(), Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn roundtrips_network_disconnect() {
+        let action = Action {
+            kind: ActionKind::NetworkDisconnect,
+            sound: SoundSettings {
+                id: Some("arcade-coin".into()),
+                volume_percent: 40,
+            },
+        };
+
+        let value = serde_json::to_value(&action).unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "type": "networkDisconnect",
+                "sound": { "id": "arcade-coin", "volumePercent": 40 },
+            })
+        );
+        assert_eq!(serde_json::from_value::<Action>(value).unwrap(), action);
+        assert!(!action.is_empty());
+    }
+
+    #[test]
+    fn reads_a_profile_that_only_has_key_sequences() {
+        let profile: crate::config::Profile = serde_json::from_value(json!({
+            "id": "6f1b9a52-7f0c-4f0e-9d7b-4a3b1e2c5d6f",
+            "name": "Diablo",
+            "processName": "game.exe",
+            "trackers": [{
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "Здоровье",
+                "preActionDelayMs": { "min": 100, "max": 300 },
+                "resumeDelayMs": 1000,
+                "action": {
+                    "type": "keySequence",
+                    "steps": [{
+                        "id": "22222222-2222-2222-2222-222222222222",
+                        "delayBeforeMs": null,
+                        "combo": { "modifiers": [], "key": "KeyQ" }
+                    }],
+                    "sound": { "id": null, "volumePercent": 50 }
+                }
+            }]
+        }))
+        .unwrap();
+
+        let ActionKind::KeySequence(sequence) = &profile.trackers[0].action.kind else {
+            panic!("a profile saved with key sequences stays a key sequence");
+        };
+        assert_eq!(sequence.steps.len(), 1);
+        assert_eq!(sequence.steps[0].combo.key, "KeyQ");
+    }
+
+    #[test]
+    fn rejects_an_invalid_sound_on_network_disconnect() {
+        assert!(Action {
+            kind: ActionKind::NetworkDisconnect,
+            sound: SoundSettings {
+                id: Some("unknown-sound".into()),
+                volume_percent: 50,
+            },
+        }
+        .validate()
+        .is_err());
+        assert!(Action {
+            kind: ActionKind::NetworkDisconnect,
+            sound: SoundSettings {
+                id: None,
+                volume_percent: 101,
+            },
+        }
+        .validate()
+        .is_err());
     }
 
     #[test]

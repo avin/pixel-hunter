@@ -198,6 +198,38 @@ describe("ProfilePage", () => {
       );
     });
 
+    it("starts a network disconnect tracker that has a pixel", async () => {
+      const { user, backend } = await openProfile(
+        profileFixture({
+          trackers: [{
+            ...complete,
+            action: { type: "networkDisconnect", sound: { id: null, volumePercent: 50 } },
+          }],
+        }),
+      );
+
+      expect(runToggle()).toBeEnabled();
+      await user.click(runToggle());
+
+      await waitFor(() => expect(runToggle()).toHaveAttribute("aria-pressed", "true"));
+      expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
+    });
+
+    it("cannot start a network disconnect tracker without pixels", async () => {
+      await openProfile(
+        profileFixture({
+          trackers: [{
+            ...complete,
+            pixels: [],
+            action: { type: "networkDisconnect", sound: { id: null, volumePercent: 50 } },
+          }],
+        }),
+      );
+
+      expect(runToggle()).toBeDisabled();
+      expect(runToggle()).toHaveAccessibleDescription("Добавьте пиксель, чтобы запустить");
+    });
+
     it("cannot start a tracker without action steps", async () => {
       await openProfile(
         profileFixture({

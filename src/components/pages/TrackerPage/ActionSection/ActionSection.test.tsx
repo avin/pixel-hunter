@@ -1,6 +1,7 @@
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
-import { createFakeBackend, profileFixture, trackerFixture } from "@/test/fakeBackend";
+import { createFakeBackend, keySequenceSteps, keyStepFixture, pixelFixture, profileFixture, trackerFixture } from "@/test/fakeBackend";
 import { renderApp } from "@/test/renderApp";
 
 describe("ActionSection", () => {
@@ -52,10 +53,10 @@ describe("ActionSection", () => {
     release();
     await waitFor(() => {
       expect(backend.state.profiles[0].trackers[0].action.sound).toEqual({ id: "soft-ping", volumePercent: 35 });
-      expect(backend.state.profiles[0].trackers[0].action.steps[0].combo.key).toBe("KeyQ");
+      expect(keySequenceSteps(backend.state.profiles[0].trackers[0].action)[0].combo.key).toBe("KeyQ");
     });
     expect(backend.callsOf("action_update")).toHaveLength(2);
-    expect(backend.state.profiles[0].trackers[1].action.steps).toHaveLength(0);
+    expect(keySequenceSteps(backend.state.profiles[0].trackers[1].action)).toHaveLength(0);
     await user.click(screen.getByRole("link", { name: "Открыть отслеживание «Здоровье»" }));
     expect(screen.getByRole("slider", { name: "Громкость" })).toHaveValue("35");
   });
@@ -100,5 +101,160 @@ describe("ActionSection", () => {
     expect(
       await screen.findByRole("option", { name: "Нажатие клавиш" }),
     ).toBeInTheDocument();
+  });
+
+  const disconnectNote = "При срабатывании обрываются TCP-соединения процесса профиля.";
+  const arcade = { id: "arcade-coin", volumePercent: 50 };
+  const actionRegion = () => within(screen.getByRole("region", { name: "Действие" }));
+
+  async function chooseType(user: UserEvent, name: string) {
+    await user.click(screen.getByRole("combobox", { name: "Тип" }));
+    await user.click(await screen.findByRole("option", { name }));
+  }
+
+  it("lists both action types and explains a network disconnect without inputs", async () => {
+    const { user } = await openTracker();
+
+    await user.click(screen.getByRole("combobox", { name: "Тип" }));
+    expect(await screen.findByRole("option", { name: "Нажатие клавиш" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Разрыв сетевого соединения" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Разрыв сетевого соединения" }));
+
+    const action = actionRegion();
+    expect(action.getByText(disconnectNote)).toBeInTheDocument();
+    expect(action.queryByRole("textbox")).not.toBeInTheDocument();
+    expect(action.queryByRole("spinbutton")).not.toBeInTheDocument();
+    expect(action.queryByRole("button", { name: "Добавить нажатие" })).not.toBeInTheDocument();
+  });
+
+  it("asks before leaving a recorded key sequence and keeps the sound", async () => {
+    const backend = createFakeBackend({
+      profiles: [profileFixture({
+        trackers: [trackerFixture({
+          action: { type: "keySequence", sound: arcade, steps: [keyStepFixture()] },
+        })],
+      })],
+    });
+    const { user } = renderApp(backend);
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Звук" })).toHaveTextContent("Arcade Coin"));
+
+    await chooseType(user, "Разрыв сетевого соединения");
+
+    const dialog = await screen.findByRole("alertdialog", { name: "Сменить тип действия?" });
+    expect(keySequenceSteps(backend.state.profiles[0].trackers[0].action)[0].combo.key).toBe("KeyQ");
+    await user.click(within(dialog).getByRole("button", { name: "Сменить" }));
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].action).toEqual({
+      type: "networkDisconnect",
+      sound: arcade,
+    }));
+    expect(screen.getByText(disconnectNote)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Звук" })).toHaveTextContent("Arcade Coin");
+    expect(screen.queryByRole("button", { name: "Добавить нажатие" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the key sequence when the type change is cancelled", async () => {
+    const backend = createFakeBackend({
+      profiles: [profileFixture({
+        trackers: [trackerFixture({
+          action: { type: "keySequence", sound: arcade, steps: [keyStepFixture()] },
+        })],
+      })],
+    });
+    const { user } = renderApp(backend);
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+
+    await chooseType(user, "Разрыв сетевого соединения");
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Сменить тип действия?" })).getByRole("button", { name: "Отмена" }));
+
+    expect(screen.queryByRole("alertdialog", { name: "Сменить тип действия?" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Тип" })).toHaveTextContent("Нажатие клавиш");
+    expect(screen.getByRole("table", { name: "Шаги последовательности" })).toHaveTextContent("Q");
+    expect(keySequenceSteps(backend.state.profiles[0].trackers[0].action)).toHaveLength(1);
+  });
+
+  it("switches an empty key sequence without asking", async () => {
+    const { user, backend } = await openTracker();
+
+    await chooseType(user, "Разрыв сетевого соединения");
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(await screen.findByText(disconnectNote)).toBeInTheDocument();
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].action.type).toBe("networkDisconnect"));
+  });
+
+  it("returns from a network disconnect to an empty key sequence immediately", async () => {
+    const backend = createFakeBackend({
+      profiles: [profileFixture({
+        trackers: [trackerFixture({
+          action: { type: "networkDisconnect", sound: arcade },
+        })],
+      })],
+    });
+    const { user } = renderApp(backend);
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+
+    await chooseType(user, "Нажатие клавиш");
+
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Добавить нажатие" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Звук" })).toHaveTextContent("Arcade Coin"));
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].action).toEqual({
+      type: "keySequence",
+      steps: [],
+      sound: arcade,
+    }));
+  });
+
+  it("keeps a running tracker running after a confirmed switch to network disconnect", async () => {
+    const backend = createFakeBackend({
+      profiles: [profileFixture({
+        trackers: [trackerFixture({
+          pixels: [pixelFixture()],
+          isRunning: true,
+          action: { type: "keySequence", sound: arcade, steps: [keyStepFixture()] },
+        })],
+      })],
+    });
+    const { user } = renderApp(backend);
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+    const running = () => screen.getByRole("button", { name: "Стоп отслеживания «Здоровье»" });
+    expect(running()).toHaveAttribute("aria-pressed", "true");
+
+    await chooseType(user, "Разрыв сетевого соединения");
+    await user.click(within(await screen.findByRole("alertdialog", { name: "Сменить тип действия?" })).getByRole("button", { name: "Сменить" }));
+
+    await waitFor(() => {
+      expect(backend.state.profiles[0].trackers[0].action.type).toBe("networkDisconnect");
+      expect(screen.getByRole("combobox", { name: "Тип" })).toHaveTextContent("Разрыв сетевого соединения");
+      expect(running()).toHaveAttribute("aria-pressed", "true");
+      expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
+    });
+  });
+
+  it("stops a running network disconnect when it becomes an empty key sequence", async () => {
+    const backend = createFakeBackend({
+      profiles: [profileFixture({
+        trackers: [trackerFixture({
+          pixels: [pixelFixture()],
+          isRunning: true,
+          action: { type: "networkDisconnect", sound: arcade },
+        })],
+      })],
+    });
+    const { user } = renderApp(backend);
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+
+    await chooseType(user, "Нажатие клавиш");
+
+    const start = await screen.findByRole("button", { name: "Старт отслеживания «Здоровье»" });
+    expect(start).toBeDisabled();
+    expect(start).toHaveAccessibleDescription("Добавьте шаг действия, чтобы запустить");
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false));
   });
 });

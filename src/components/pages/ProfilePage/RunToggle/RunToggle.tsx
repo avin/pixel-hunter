@@ -2,7 +2,7 @@ import { Play, Square } from "lucide-react";
 import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { useTrackerSetRunningMutation } from "@/store/api";
-import type { Tracker } from "@/store/types";
+import { actionIsEmpty, type Tracker } from "@/store/types";
 
 interface Props {
   profileId: string;
@@ -11,7 +11,7 @@ interface Props {
 
 function missingPartHint(tracker: Tracker) {
   if (tracker.pixels.length === 0) return "Добавьте пиксель, чтобы запустить";
-  if (tracker.action.steps.length === 0) return "Добавьте шаг действия, чтобы запустить";
+  if (actionIsEmpty(tracker.action)) return "Добавьте шаг действия, чтобы запустить";
   return undefined;
 }
 

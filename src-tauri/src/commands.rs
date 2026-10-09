@@ -200,9 +200,10 @@ pub fn debug_run_action(
     tracker_id: Uuid,
 ) -> AppResult<()> {
     let action = profiles::get_action(&store, profile_id, tracker_id)?;
+    let process_name = profiles::profile_process_name(&store, profile_id, tracker_id)?;
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(3));
-        if let Err(error) = crate::keyboard::run_action(&action) {
+        if let Err(error) = crate::engine::perform_action(&action, &process_name) {
             eprintln!("Действие не выполнено: {error}");
         }
     });

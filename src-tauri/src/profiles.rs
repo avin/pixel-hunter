@@ -594,7 +594,9 @@ mod tests {
         )
         .unwrap();
 
-        let ActionKind::KeySequence(sequence) = &saved.kind;
+        let ActionKind::KeySequence(sequence) = &saved.kind else {
+            panic!("saved action is a key sequence");
+        };
         assert_eq!(sequence.steps[0].delay_before_ms, None);
         assert_eq!(sequence.steps[1].delay_before_ms, delay);
         assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
