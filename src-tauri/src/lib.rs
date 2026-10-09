@@ -20,8 +20,10 @@ mod screenshot_viewer;
 mod screenshots;
 mod settings;
 mod shutter;
+mod tracker_hotkeys;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use tauri::{Emitter, Manager};
 
@@ -37,11 +39,25 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
-                    if app
-                        .state::<hotkey::PauseHotkeys>()
-                        .on_shortcut(shortcut, event.state)
-                    {
-                        commands::toggle_work_pause(app);
+                    let state = event.state;
+                    match tracker_hotkeys::dispatch_shortcut(
+                        || {
+                            app.state::<Arc<hotkey::PauseHotkeys>>()
+                                .on_shortcut(shortcut, state)
+                        },
+                        || {
+                            app.state::<tracker_hotkeys::TrackerHotkeyLink>()
+                                .take_press(shortcut, state)
+                        },
+                    ) {
+                        tracker_hotkeys::ShortcutDispatch::TogglePause => {
+                            commands::toggle_work_pause(app);
+                        }
+                        tracker_hotkeys::ShortcutDispatch::Tracker(tracker_id) => {
+                            app.state::<tracker_hotkeys::TrackerHotkeyLink>()
+                                .send(tracker_id);
+                        }
+                        tracker_hotkeys::ShortcutDispatch::Ignore => {}
                     }
                 })
                 .build(),
@@ -62,19 +78,28 @@ pub fn run() {
             if let Some(backup) = loaded.corrupt_backup {
                 warn_about_corrupt_config(&backup);
             }
-            let emitter = app.handle().clone();
-            let audio = action_sound::AudioService::start();
-            app.manage(audio.clone());
-            app.manage(Engine::start_with_audio(audio, move |status| {
-                let _ = emitter.emit(engine::STATUS_EVENT, status);
-            }));
             let saved_hotkey = loaded
                 .store
                 .read(|config| config.settings.pause_hotkey.clone());
-            app.manage(hotkey::PauseHotkeys::install(
+            let pause = Arc::new(hotkey::PauseHotkeys::install(
                 saved_hotkey,
                 app.handle().clone(),
             ));
+            let emitter = app.handle().clone();
+            let audio = action_sound::AudioService::start();
+            app.manage(audio.clone());
+            let (engine, tracker_hotkeys, gate) = Engine::start_with_audio(
+                audio,
+                move |status| {
+                    let _ = emitter.emit(engine::STATUS_EVENT, status);
+                },
+                Box::new(hotkey::OsShortcuts::new(app.handle().clone())),
+                Arc::clone(&pause) as Arc<dyn hotkey::ShortcutMute>,
+            );
+            app.manage(engine);
+            app.manage(tracker_hotkeys);
+            app.manage(gate);
+            app.manage(pause);
             let handle = app.handle().clone();
             loaded
                 .store
@@ -97,6 +122,8 @@ pub fn run() {
             commands::tracker_update,
             commands::tracker_delete,
             commands::tracker_set_running,
+            commands::tracker_set_trigger,
+            commands::tracker_set_hotkey,
             commands::engine_activate,
             commands::engine_deactivate,
             commands::settings_get,
@@ -105,6 +132,8 @@ pub fn run() {
             commands::settings_clear_pause_hotkey,
             commands::pause_hotkey_begin,
             commands::pause_hotkey_cancel,
+            commands::key_capture_begin,
+            commands::key_capture_end,
             commands::work_pause_toggle,
             commands::action_update,
             commands::key_codes_list,

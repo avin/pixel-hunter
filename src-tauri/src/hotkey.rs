@@ -15,9 +15,21 @@ pub trait ShortcutHost {
     fn unregister(&mut self, accelerator: &Accelerator) -> Result<(), ()>;
 }
 
+/// Drops a registered shortcut for the duration of injected keys, then puts it back.
+pub trait ShortcutMute: Send + Sync {
+    fn mute(&self);
+    fn unmute(&self);
+}
+
 /// Registers and removes shortcuts through `tauri-plugin-global-shortcut`.
 pub struct OsShortcuts {
     app: AppHandle,
+}
+
+impl OsShortcuts {
+    pub fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
 }
 
 impl ShortcutHost for OsShortcuts {
@@ -85,6 +97,8 @@ pub struct HotkeyBinding<H> {
     saved: Option<Accelerator>,
     registered: Option<Accelerator>,
     assigning: bool,
+    /// Key recording in the window. While this is non-zero the saved combo stays unregistered.
+    capture_depth: u32,
     events: Arc<Mutex<ShortcutEvents>>,
 }
 
@@ -96,6 +110,7 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
             saved: saved.clone(),
             registered: None,
             assigning: false,
+            capture_depth: 0,
             events: Arc::default(),
         };
         if let Some(accelerator) = saved {
@@ -107,6 +122,29 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
     pub fn begin_assign(&mut self) {
         self.assigning = true;
         self.unregister_current();
+    }
+
+    /// Drops the pause shortcut so a key recording in the window can see it.
+    pub fn begin_capture(&mut self) {
+        self.capture_depth = self.capture_depth.saturating_add(1);
+        if self.capture_depth == 1 {
+            self.unregister_current();
+        }
+    }
+
+    pub fn end_capture(&mut self) {
+        self.capture_depth = self.capture_depth.saturating_sub(1);
+        if self.capture_depth == 0 && !self.assigning {
+            self.restore_saved();
+        }
+    }
+
+    #[cfg(test)]
+    pub fn on_shortcut(&self, shortcut: &Shortcut, state: ShortcutState) -> bool {
+        self.events
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .on_shortcut(shortcut, state)
     }
 
     pub fn cancel_assign(&mut self) {
@@ -127,6 +165,13 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
             modifiers: accelerator.modifiers.clone(),
             key: accelerator.key.clone(),
         };
+        if store
+            .read(|config| settings::tracker_uses_combo(config, &normalized))
+        {
+            return Err(AppError::Validation(
+                "Это сочетание уже назначено отслеживанию".into(),
+            ));
+        }
         self.unregister_current();
         if self.host.register(&accelerator).is_err() {
             self.assigning = false;
@@ -135,16 +180,20 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
                 "Система не может занять это сочетание".into(),
             ));
         }
-        self.registered = Some(accelerator);
+        self.registered = Some(accelerator.clone());
         if let Err(error) = settings::set_pause_hotkey(store, Some(normalized.clone())) {
             self.unregister_current();
             self.assigning = false;
             self.restore_saved();
             return Err(error);
         }
-        self.saved = self.registered.clone();
+        self.saved = Some(accelerator);
         self.assigning = false;
-        self.enable_events();
+        if self.capture_depth == 0 {
+            self.enable_events();
+        } else {
+            self.unregister_current();
+        }
         Ok(normalized)
     }
 
@@ -172,6 +221,9 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
     }
 
     fn register(&mut self, accelerator: Accelerator) {
+        if self.capture_depth > 0 {
+            return;
+        }
         if self.host.register(&accelerator).is_ok() {
             self.registered = Some(accelerator);
             if !self.assigning {
@@ -188,7 +240,7 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
     }
 
     fn restore_saved(&mut self) {
-        if self.registered.is_some() {
+        if self.capture_depth > 0 || self.registered.is_some() {
             return;
         }
         if let Some(accelerator) = self.saved.clone() {
@@ -204,7 +256,7 @@ pub struct PauseHotkeys {
 
 impl PauseHotkeys {
     pub fn install(saved: Option<KeyCombo>, app: AppHandle) -> Self {
-        let binding = HotkeyBinding::install(saved, OsShortcuts { app });
+        let binding = HotkeyBinding::install(saved, OsShortcuts::new(app));
         Self {
             events: Arc::clone(&binding.events),
             binding: Mutex::new(binding),
@@ -216,11 +268,31 @@ impl PauseHotkeys {
     }
 
     /// Handles one plugin event. `true` when the pause should toggle.
+    /// Uses the event table only: the plugin calls this while holding its own lock, and assignment
+    /// takes the binding lock before calling back into the plugin.
     pub fn on_shortcut(&self, shortcut: &Shortcut, state: ShortcutState) -> bool {
         self.events
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .on_shortcut(shortcut, state)
+    }
+
+    pub fn begin_capture(&self) {
+        self.lock().begin_capture();
+    }
+
+    pub fn end_capture(&self) {
+        self.lock().end_capture();
+    }
+}
+
+impl ShortcutMute for PauseHotkeys {
+    fn mute(&self) {
+        self.begin_capture();
+    }
+
+    fn unmute(&self) {
+        self.end_capture();
     }
 }
 
@@ -309,6 +381,42 @@ mod tests {
     }
 
     #[test]
+    fn a_tracker_combo_is_refused_without_replacing_the_pause_shortcut() {
+        let (_dir, store) = saved_store(Some(combo(vec![Modifier::Ctrl], "KeyQ")));
+        let tracker_combo = combo(vec![], "F5");
+        store
+            .update(|config| {
+                let mut tracker = crate::config::Tracker::new("Здоровье".into());
+                tracker.hotkey = Some(tracker_combo.clone());
+                let mut profile = crate::config::Profile::new("Diablo".into(), "game.exe".into());
+                profile.trackers.push(tracker);
+                config.profiles.push(profile);
+                Ok(())
+            })
+            .unwrap();
+        let mut binding = HotkeyBinding::install(
+            Some(combo(vec![Modifier::Ctrl], "KeyQ")),
+            FakeHost::default(),
+        );
+
+        let result = binding.assign(&store, combo(vec![], "F5"));
+
+        assert!(matches!(result, Err(AppError::Validation(_))));
+        assert_eq!(
+            settings::settings(&store).pause_hotkey,
+            Some(combo(vec![Modifier::Ctrl], "KeyQ"))
+        );
+        assert_eq!(
+            binding.host.registered.as_ref().map(|item| item.key.as_str()),
+            Some("KeyQ")
+        );
+        assert_eq!(
+            store.read(|config| config.profiles[0].trackers[0].hotkey.clone()),
+            Some(tracker_combo)
+        );
+    }
+
+    #[test]
     fn os_refusal_keeps_the_previous_combo() {
         let (_dir, store) = saved_store(Some(combo(vec![Modifier::Ctrl], "KeyQ")));
         let mut binding = HotkeyBinding::install(
@@ -332,6 +440,22 @@ mod tests {
                 .map(|item| item.key.as_str()),
             Some("KeyQ")
         );
+    }
+
+    #[test]
+    fn key_capture_unregisters_until_it_ends_and_assignment_still_drops_the_shortcut() {
+        let mut binding = HotkeyBinding::install(Some(combo(vec![], "F5")), FakeHost::default());
+        assert_eq!(binding.host.registered.as_ref().map(|item| item.key.as_str()), Some("F5"));
+
+        binding.begin_capture();
+        assert!(binding.host.registered.is_none());
+        binding.end_capture();
+        assert_eq!(binding.host.registered.as_ref().map(|item| item.key.as_str()), Some("F5"));
+
+        binding.begin_assign();
+        assert!(binding.host.registered.is_none());
+        binding.cancel_assign();
+        assert_eq!(binding.host.registered.as_ref().map(|item| item.key.as_str()), Some("F5"));
     }
 
     #[test]

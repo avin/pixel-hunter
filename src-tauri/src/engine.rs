@@ -5,6 +5,9 @@ mod executor;
 mod machine;
 mod poller;
 
+#[cfg(test)]
+pub(crate) use machine::EngineCore;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -18,8 +21,21 @@ use crate::action_sound::AudioService;
 use crate::config::Config;
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
+use crate::hotkey::{ShortcutHost, ShortcutMute};
 use crate::keyboard;
 use crate::network;
+#[cfg(test)]
+use crate::tracker_hotkeys::NoopShortcuts;
+use crate::tracker_hotkeys::{ShortcutGate, TrackerHotkeyLink, TrackerHotkeyParts};
+
+#[cfg(test)]
+struct NoShortcutMute;
+
+#[cfg(test)]
+impl ShortcutMute for NoShortcutMute {
+    fn mute(&self) {}
+    fn unmute(&self) {}
+}
 use executor::CancelledJobs;
 use machine::Job;
 use poller::{Command, Poller};
@@ -97,20 +113,31 @@ impl Engine {
     /// Starts the poll and executor threads; they idle until a profile is activated.
     #[cfg(test)]
     pub fn start(emit: impl Fn(EngineStatus) + Send + 'static) -> Self {
-        Self::start_with_audio(AudioService::start(), emit)
+        Self::start_with_audio(
+            AudioService::start(),
+            emit,
+            Box::new(NoopShortcuts),
+            Arc::new(NoShortcutMute),
+        )
+        .0
     }
 
     pub fn start_with_audio(
         audio: AudioService,
         emit: impl Fn(EngineStatus) + Send + 'static,
-    ) -> Self {
+        shortcuts: Box<dyn ShortcutHost + Send>,
+        muted: Arc<dyn ShortcutMute>,
+    ) -> (Self, TrackerHotkeyLink, Arc<ShortcutGate>) {
         let (commands, command_receiver) = mpsc::channel();
+        let hotkeys = TrackerHotkeyParts::open();
+        let gate = Arc::new(ShortcutGate::new(shortcuts, Arc::clone(&hotkeys.events)));
         let (jobs, job_receiver) = mpsc::channel();
         let cancelled = Arc::new(CancelledJobs::default());
         let pause = Arc::new(PauseControl::new());
 
         let done = commands.clone();
         let (executor_cancelled, executor_paused) = (cancelled.clone(), pause.signal.clone());
+        let playback_gate = Arc::clone(&gate);
         thread::spawn(move || {
             executor::run(
                 job_receiver,
@@ -120,7 +147,14 @@ impl Engine {
                     play_action(
                         job,
                         |sound| audio.play_runtime(sound),
-                        |job| perform_action(&job.action, &job.process_name),
+                        |job| {
+                            perform_action(
+                                &job.action,
+                                &job.process_name,
+                                &playback_gate,
+                                muted.as_ref(),
+                            )
+                        },
                     );
                 },
                 thread::sleep,
@@ -136,17 +170,24 @@ impl Engine {
             cancelled,
             paused: pause.signal.clone(),
             emit,
+            gate: Arc::clone(&gate),
+            presses: hotkeys.presses,
+            key_capture: hotkeys.key_capture,
         };
         thread::spawn(move || poller.run());
 
-        Self {
-            commands,
-            activation: Mutex::new(Activation {
-                profile_id: None,
-                epoch: 0,
-            }),
-            pause,
-        }
+        (
+            Self {
+                commands,
+                activation: Mutex::new(Activation {
+                    profile_id: None,
+                    epoch: 0,
+                }),
+                pause,
+            },
+            hotkeys.link,
+            gate,
+        )
     }
 
     /// Makes the profile the only one that runs, replacing a previously active one.
@@ -233,13 +274,45 @@ impl Engine {
 }
 
 /// Plays a key sequence, or disconnects TCP using the process name stored on the job.
-pub(crate) fn perform_action(action: &Action, process_name: &str) -> AppResult<()> {
+/// A key sequence lifts every registered shortcut first: Windows `RegisterHotKey` would
+/// otherwise swallow an injected key that matches the condition hotkey.
+pub(crate) fn perform_action(
+    action: &Action,
+    process_name: &str,
+    gate: &ShortcutGate,
+    muted: &dyn ShortcutMute,
+) -> AppResult<()> {
     match &action.kind {
-        ActionKind::KeySequence(sequence) => keyboard::run_action(sequence),
+        ActionKind::KeySequence(sequence) => with_hotkeys_lifted(gate, muted, || keyboard::run_action(sequence)),
         ActionKind::NetworkDisconnect => {
             network::disconnect(process_name);
             Ok(())
         }
+    }
+}
+
+fn with_hotkeys_lifted<T>(
+    gate: &ShortcutGate,
+    muted: &dyn ShortcutMute,
+    body: impl FnOnce() -> T,
+) -> T {
+    gate.suspend();
+    muted.mute();
+    let restore = HotkeyRestore { gate, muted };
+    let result = body();
+    drop(restore);
+    result
+}
+
+struct HotkeyRestore<'a> {
+    gate: &'a ShortcutGate,
+    muted: &'a dyn ShortcutMute,
+}
+
+impl Drop for HotkeyRestore<'_> {
+    fn drop(&mut self) {
+        self.muted.unmute();
+        self.gate.resume();
     }
 }
 
@@ -489,5 +562,91 @@ mod tests {
         let (fresh, _receiver) = engine();
         assert!(!fresh.is_user_paused());
         assert!(!fresh.pause.signal.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn an_injected_key_is_sent_while_its_hotkey_is_unregistered() {
+        use crate::action::{KeyCombo, Modifier};
+        use crate::config::Tracker;
+        use crate::hotkey::ShortcutHost;
+        use crate::settings::Accelerator;
+        use crate::tracker_hotkeys::desired_tracker_hotkeys;
+        use std::sync::Mutex as LogMutex;
+
+        #[derive(Default)]
+        struct Host {
+            registered: Vec<String>,
+        }
+
+        impl ShortcutHost for Host {
+            fn register(&mut self, accelerator: &Accelerator) -> Result<(), ()> {
+                self.registered.push(accelerator.key.clone());
+                Ok(())
+            }
+
+            fn unregister(&mut self, accelerator: &Accelerator) -> Result<(), ()> {
+                self.registered.retain(|key| key != &accelerator.key);
+                Ok(())
+            }
+        }
+
+        struct SharedHost(Arc<Mutex<Host>>);
+
+        impl ShortcutHost for SharedHost {
+            fn register(&mut self, accelerator: &Accelerator) -> Result<(), ()> {
+                self.0.lock().unwrap().register(accelerator)
+            }
+
+            fn unregister(&mut self, accelerator: &Accelerator) -> Result<(), ()> {
+                self.0.lock().unwrap().unregister(accelerator)
+            }
+        }
+
+        struct PauseLog(LogMutex<Vec<&'static str>>);
+
+        impl ShortcutMute for PauseLog {
+            fn mute(&self) {
+                self.0.lock().unwrap().push("mute");
+            }
+
+            fn unmute(&self) {
+                self.0.lock().unwrap().push("unmute");
+            }
+        }
+
+        let host = Arc::new(Mutex::new(Host::default()));
+        let gate = ShortcutGate::new(
+            Box::new(SharedHost(Arc::clone(&host))),
+            Arc::new(Mutex::new(crate::tracker_hotkeys::TrackerShortcutTable::default())),
+        );
+        let mut tracker = Tracker::new("Здоровье".into());
+        tracker.trigger = crate::config::Trigger::Hotkey;
+        tracker.hotkey = Some(KeyCombo {
+            modifiers: vec![],
+            key: "Tab".into(),
+        });
+        tracker.action = crate::action::Action::key_sequence(crate::action::KeySequenceAction {
+            steps: vec![crate::action::KeyStep {
+                id: Uuid::new_v4(),
+                delay_before_ms: None,
+                combo: KeyCombo {
+                    modifiers: vec![Modifier::Ctrl],
+                    key: "Tab".into(),
+                },
+            }],
+        });
+        tracker.is_running = true;
+        let desired = desired_tracker_hotkeys(true, false, 0, true, &[tracker]);
+        gate.sync(&desired);
+        let pause = PauseLog(LogMutex::new(Vec::new()));
+
+        let sent = with_hotkeys_lifted(&gate, &pause, || {
+            gate.sync(&desired);
+            host.lock().unwrap().registered.is_empty()
+        });
+
+        assert!(sent);
+        assert_eq!(pause.0.lock().unwrap().as_slice(), ["mute", "unmute"]);
+        assert_eq!(host.lock().unwrap().registered, ["Tab"]);
     }
 }

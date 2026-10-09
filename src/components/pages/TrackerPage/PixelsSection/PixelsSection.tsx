@@ -1,5 +1,4 @@
 import { Crosshair } from "lucide-react";
-import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -8,6 +7,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { ConditionHeader } from "@/components/pages/TrackerPage/ConditionSection/ConditionSection";
 import {
   usePixelCaptureCancelMutation,
   usePixelCaptureStartMutation,
@@ -38,7 +38,6 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
   const [startCapture] = usePixelCaptureStartMutation();
   const [cancelCapture] = usePixelCaptureCancelMutation();
   const { data: screenshotsDir } = useScreenshotsDirQuery();
-  const headingId = useId();
 
   const addButton = (
     <Button
@@ -52,13 +51,10 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
   );
 
   return (
-    <section aria-labelledby={headingId} className="flex min-h-0 min-w-0 flex-1 flex-col border">
-      <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
-        <h2 id={headingId} className="font-heading text-sm font-medium">
-          Пиксели
-        </h2>
+    <section aria-label="Пиксели" className="flex min-h-0 min-w-0 flex-1 flex-col border">
+      <ConditionHeader profileId={profileId} tracker={tracker}>
         {addButton}
-      </div>
+      </ConditionHeader>
 
       {status && (
         <CaptureStatusPanel

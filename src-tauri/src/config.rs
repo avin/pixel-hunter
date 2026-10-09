@@ -91,6 +91,15 @@ impl Profile {
     }
 }
 
+/// What starts the tracker's action. Missing data means pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Trigger {
+    #[default]
+    Pixels,
+    Hotkey,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tracker {
@@ -100,6 +109,10 @@ pub struct Tracker {
     pub resume_delay_ms: u32,
     #[serde(default)]
     pub pixels: Vec<Pixel>,
+    #[serde(default)]
+    pub trigger: Trigger,
+    #[serde(default)]
+    pub hotkey: Option<KeyCombo>,
     #[serde(default)]
     pub action: Action,
     /// Chosen by the user; the engine runs the tracker only while it is also complete.
@@ -111,6 +124,7 @@ pub struct Tracker {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MissingPart {
     Pixels,
+    Hotkey,
     ActionSteps,
 }
 
@@ -118,6 +132,7 @@ impl MissingPart {
     pub fn message(self) -> &'static str {
         match self {
             MissingPart::Pixels => "Добавьте пиксель, чтобы запустить отслеживание",
+            MissingPart::Hotkey => "Назначьте сочетание, чтобы запустить отслеживание",
             MissingPart::ActionSteps => "Добавьте шаг действия, чтобы запустить отслеживание",
         }
     }
@@ -131,6 +146,8 @@ impl Tracker {
             pre_action_delay_ms: DelayRange::default(),
             resume_delay_ms: DEFAULT_RESUME_DELAY_MS,
             pixels: Vec::new(),
+            trigger: Trigger::Pixels,
+            hotkey: None,
             action: Action::default(),
             is_running: false,
         }
@@ -142,13 +159,12 @@ impl Tracker {
     }
 
     pub fn missing_part(&self) -> Option<MissingPart> {
-        if self.pixels.is_empty() {
-            Some(MissingPart::Pixels)
-        } else if self.action.is_empty() {
-            Some(MissingPart::ActionSteps)
-        } else {
-            None
-        }
+        let condition = match self.trigger {
+            Trigger::Pixels if self.pixels.is_empty() => Some(MissingPart::Pixels),
+            Trigger::Hotkey if self.hotkey.is_none() => Some(MissingPart::Hotkey),
+            _ => None,
+        };
+        condition.or_else(|| self.action.is_empty().then_some(MissingPart::ActionSteps))
     }
 
     pub fn is_complete(&self) -> bool {
@@ -295,6 +311,8 @@ mod tests {
                         "preActionDelayMs": { "min": 100, "max": 300 },
                         "resumeDelayMs": 1000,
                         "pixels": [],
+                        "trigger": "pixels",
+                        "hotkey": null,
                         "action": { "type": "keySequence", "steps": [], "sound": { "id": null, "volumePercent": 50 } },
                         "isRunning": false,
                     }],
@@ -399,6 +417,47 @@ mod tests {
         assert!(!tracker.is_running);
     }
 
+    #[test]
+    fn tracker_saved_without_a_trigger_opens_as_pixels_and_round_trips_both_fields() {
+        let mut saved = tracker_json(json!({ "min": 100, "max": 300 }), 1000);
+        let pixel_id = Uuid::new_v4();
+        saved["pixels"] = json!([{
+            "id": pixel_id,
+            "x": 1,
+            "y": 2,
+            "color": { "r": 3, "g": 4, "b": 5 },
+            "condition": "equals",
+            "tolerancePercent": 10,
+        }]);
+        saved["action"] = json!({
+            "type": "keySequence",
+            "steps": [{ "id": Uuid::new_v4(), "delayBeforeMs": null, "combo": { "modifiers": [], "key": "KeyQ" } }],
+            "sound": { "id": null, "volumePercent": 50 },
+        });
+
+        let opened: Tracker = serde_json::from_value(saved).unwrap();
+
+        assert_eq!(opened.trigger, Trigger::Pixels);
+        assert_eq!(opened.hotkey, None);
+        assert_eq!(opened.pixels.len(), 1);
+        assert_eq!(opened.pixels[0].id, pixel_id);
+        assert!(!opened.action.is_empty());
+
+        let mut stored = opened.clone();
+        stored.trigger = Trigger::Hotkey;
+        stored.hotkey = Some(KeyCombo {
+            modifiers: vec![crate::action::Modifier::Ctrl],
+            key: "Digit1".into(),
+        });
+        let restored: Tracker =
+            serde_json::from_value(serde_json::to_value(&stored).unwrap()).unwrap();
+
+        assert_eq!(restored.trigger, Trigger::Hotkey);
+        assert_eq!(restored.hotkey, stored.hotkey);
+        assert_eq!(restored.pixels, stored.pixels);
+        assert_eq!(restored.action, stored.action);
+    }
+
     fn complete_tracker() -> Tracker {
         let mut tracker = Tracker::new("Здоровье".into());
         tracker
@@ -471,6 +530,60 @@ mod tests {
         tracker.pixels.clear();
         tracker.stop_if_incomplete();
         assert!(!tracker.is_running);
+    }
+
+    fn hotkey_combo() -> KeyCombo {
+        KeyCombo {
+            modifiers: vec![crate::action::Modifier::Ctrl],
+            key: "Digit1".into(),
+        }
+    }
+
+    #[test]
+    fn hotkey_tracker_is_complete_without_pixels_when_the_combo_and_action_are_ready() {
+        let mut ready = complete_tracker();
+        ready.trigger = Trigger::Hotkey;
+        ready.hotkey = Some(hotkey_combo());
+        ready.pixels.clear();
+        let mut without_combo = ready.clone();
+        without_combo.hotkey = None;
+
+        assert_eq!(ready.missing_part(), None);
+        assert!(ready.is_complete());
+        assert_eq!(without_combo.missing_part(), Some(MissingPart::Hotkey));
+        assert!(!without_combo.is_complete());
+    }
+
+    #[test]
+    fn clearing_the_combo_or_switching_to_an_unready_variant_stops_a_running_tracker() {
+        let mut pixels = complete_tracker();
+        pixels.is_running = true;
+        pixels.hotkey = Some(hotkey_combo());
+
+        pixels.trigger = Trigger::Hotkey;
+        pixels.stop_if_incomplete();
+        assert!(pixels.is_running, "a ready hotkey variant stays running");
+
+        pixels.hotkey = None;
+        pixels.stop_if_incomplete();
+        assert!(!pixels.is_running);
+
+        let mut running_pixels = complete_tracker();
+        running_pixels.is_running = true;
+        running_pixels.trigger = Trigger::Hotkey;
+        running_pixels.stop_if_incomplete();
+        assert!(!running_pixels.is_running, "switching to a hotkey without a combo stops");
+
+        let mut back = complete_tracker();
+        back.is_running = true;
+        back.trigger = Trigger::Hotkey;
+        back.hotkey = Some(hotkey_combo());
+        back.pixels.clear();
+        back.stop_if_incomplete();
+        assert!(back.is_running);
+        back.trigger = Trigger::Pixels;
+        back.stop_if_incomplete();
+        assert!(!back.is_running, "switching to pixels without pixels stops");
     }
 
     #[test]

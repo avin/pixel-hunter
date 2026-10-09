@@ -230,6 +230,55 @@ describe("ProfilePage", () => {
       expect(runToggle()).toHaveAccessibleDescription("Добавьте пиксель, чтобы запустить");
     });
 
+    it("asks to assign a combo when a hotkey tracker has none", async () => {
+      await openProfile(profileFixture({
+        trackers: [trackerFixture({
+          trigger: "hotkey",
+          hotkey: null,
+          pixels: [],
+          action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
+        })],
+      }));
+
+      expect(runToggle()).toBeDisabled();
+      expect(runToggle()).toHaveAccessibleDescription("Назначьте сочетание, чтобы запустить");
+    });
+
+    it("starts a hotkey tracker that has a combo and no pixels", async () => {
+      const { user, backend } = await openProfile(profileFixture({
+        trackers: [trackerFixture({
+          trigger: "hotkey",
+          hotkey: { modifiers: ["ctrl"], key: "Digit1" },
+          pixels: [],
+          action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
+        })],
+      }));
+
+      expect(runToggle()).toBeEnabled();
+      await user.click(runToggle());
+      await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true));
+    });
+
+    it("stops a running hotkey tracker when its combo is cleared", async () => {
+      const { user, backend } = await openProfile(profileFixture({
+        trackers: [trackerFixture({
+          trigger: "hotkey",
+          hotkey: { modifiers: [], key: "F5" },
+          pixels: [],
+          isRunning: true,
+          action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
+        })],
+      }));
+
+      await user.click(screen.getByRole("link", { name: "Здоровье" }));
+      await user.click(await screen.findByRole("button", { name: "Сбросить сочетание" }));
+      await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false));
+      await user.click(screen.getByRole("link", { name: "Назад" }));
+
+      expect(runToggle()).toHaveAttribute("aria-pressed", "false");
+      expect(runToggle()).toHaveAccessibleDescription("Назначьте сочетание, чтобы запустить");
+    });
+
     it("cannot start a tracker without action steps", async () => {
       await openProfile(
         profileFixture({

@@ -1,5 +1,6 @@
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useKeyCapture } from "@/hooks/useKeyCapture";
 import { TableCell, TableRow } from "@/components/ui/table";
 import type { KeyStep } from "@/store/types";
 import { KeyRecorder } from "../KeyRecorder/KeyRecorder";
@@ -24,6 +25,7 @@ export function StepRow({
   onDelete,
   onUnsupported,
 }: Props) {
+  const capture = useKeyCapture();
   return (
     <TableRow>
       <TableCell className="font-mono text-muted-foreground tabular-nums">{stepNumber}.</TableCell>
@@ -50,6 +52,8 @@ export function StepRow({
             supportedCodes={supportedCodes}
             onRecord={(combo) => onChange({ ...step, combo })}
             onUnsupported={onUnsupported}
+            onPrepareRecording={capture.onPrepareRecording}
+            onRecordingChange={capture.onRecordingChange}
           >
             Перезаписать
           </KeyRecorder>

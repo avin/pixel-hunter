@@ -19,7 +19,7 @@ async function openTracker(pixels: Pixel[] = []) {
   );
   await rendered.user.click(await screen.findByRole("link", { name: "Diablo" }));
   await rendered.user.click(screen.getByRole("link", { name: "Здоровье" }));
-  await screen.findByRole("heading", { name: "Пиксели" });
+  await screen.findByRole("button", { name: "Добавить пиксель" });
   return rendered;
 }
 

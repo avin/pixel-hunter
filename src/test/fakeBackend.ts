@@ -103,8 +103,17 @@ export function createFakeBackend({
     return tracker;
   };
 
+  const sameCombo = (left: KeyCombo, right: KeyCombo) => {
+    const modifiers = (combo: KeyCombo) => [...combo.modifiers].sort().join("\0");
+    return left.key === right.key && modifiers(left) === modifiers(right);
+  };
+
   const missingPart = (tracker: Tracker) => {
-    if (tracker.pixels.length === 0) return "Добавьте пиксель, чтобы запустить отслеживание";
+    if ((tracker.trigger ?? "pixels") === "hotkey") {
+      if (!tracker.hotkey) return "Назначьте сочетание, чтобы запустить отслеживание";
+    } else if (tracker.pixels.length === 0) {
+      return "Добавьте пиксель, чтобы запустить отслеживание";
+    }
     if (actionIsEmpty(tracker.action)) {
       return "Добавьте шаг действия, чтобы запустить отслеживание";
     }
@@ -152,6 +161,8 @@ export function createFakeBackend({
           preActionDelayMs: { min: 100, max: 300 },
           resumeDelayMs: 1000,
           pixels: [],
+          trigger: "pixels",
+          hotkey: null,
           action: { type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } },
           isRunning: false,
         };
@@ -180,6 +191,33 @@ export function createFakeBackend({
         stopIfIncomplete(tracker);
         return structuredClone(action);
       }
+      case "tracker_set_trigger": {
+        const tracker = findTracker(args.profileId, args.trackerId);
+        tracker.trigger = args.trigger as Tracker["trigger"];
+        stopIfIncomplete(tracker);
+        return structuredClone(tracker);
+      }
+      case "tracker_set_hotkey": {
+        const tracker = findTracker(args.profileId, args.trackerId);
+        const hotkey = args.hotkey as KeyCombo | null;
+        if (hotkey) {
+          if (!KEY_CODES.some(({ code }) => code === hotkey.key)) {
+            throw new Error("Эта клавиша не поддерживается");
+          }
+          if (state.settings.pauseHotkey && sameCombo(state.settings.pauseHotkey, hotkey)) {
+            throw new Error("Это сочетание уже назначено паузе");
+          }
+          const taken = findProfile(args.profileId).trackers.some(
+            (other) => other.id !== tracker.id && other.hotkey && sameCombo(other.hotkey, hotkey),
+          );
+          if (taken) throw new Error("Это сочетание уже назначено другому отслеживанию");
+          tracker.hotkey = structuredClone(hotkey);
+        } else {
+          tracker.hotkey = null;
+        }
+        stopIfIncomplete(tracker);
+        return structuredClone(tracker);
+      }
       case "tracker_set_running": {
         const tracker = findTracker(args.profileId, args.trackerId);
         const missing = missingPart(tracker);
@@ -203,6 +241,11 @@ export function createFakeBackend({
         if (!KEY_CODES.some(({ code }) => code === pauseHotkey.key)) {
           throw new Error("Эта клавиша не поддерживается");
         }
+        if (state.profiles.some((profile) => profile.trackers.some(
+          (tracker) => tracker.hotkey && sameCombo(tracker.hotkey, pauseHotkey),
+        ))) {
+          throw new Error("Это сочетание уже назначено отслеживанию");
+        }
         state.settings.pauseHotkey = structuredClone(pauseHotkey);
         return structuredClone(pauseHotkey);
       }
@@ -211,6 +254,8 @@ export function createFakeBackend({
         return null;
       case "pause_hotkey_begin":
       case "pause_hotkey_cancel":
+      case "key_capture_begin":
+      case "key_capture_end":
         return null;
       case "work_pause_toggle":
         state.paused = !state.paused;
@@ -347,6 +392,8 @@ export function trackerFixture(overrides: Partial<Tracker> = {}): Tracker {
     preActionDelayMs: { min: 100, max: 300 },
     resumeDelayMs: 1000,
     pixels: [],
+    trigger: "pixels",
+    hotkey: null,
     action: { type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } },
     isRunning: false,
     ...overrides,

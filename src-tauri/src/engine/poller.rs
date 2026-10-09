@@ -1,7 +1,7 @@
 //! Poll thread: owns the core, the screen and the clock of the active profile.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -11,11 +11,14 @@ use uuid::Uuid;
 use super::executor::CancelledJobs;
 use super::machine::{EngineCore, Job};
 use super::EngineStatus;
-use crate::config::Profile;
+use crate::config::{Profile, Tracker};
 use crate::foreground::{self, WindowHandle};
 use crate::keyboard::TimerResolution;
 use crate::processes;
 use crate::screen::PrimaryScreen;
+use crate::tracker_hotkeys::{
+    desired_tracker_hotkeys, ShortcutGate,
+};
 
 pub const TICK: Duration = Duration::from_millis(50);
 const SCREEN_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -88,11 +91,14 @@ pub struct Poller<E> {
     pub cancelled: Arc<CancelledJobs>,
     pub paused: Arc<AtomicBool>,
     pub emit: E,
+    pub gate: Arc<ShortcutGate>,
+    pub presses: Receiver<Uuid>,
+    pub key_capture: Arc<AtomicU32>,
 }
 
 impl<E: Fn(EngineStatus)> Poller<E> {
     /// Runs until the engine handle is dropped; sleeps on the command channel while inactive.
-    pub fn run(self) {
+    pub fn run(mut self) {
         let started = Instant::now();
         let mut rng = rand::rng();
         loop {
@@ -107,7 +113,7 @@ impl<E: Fn(EngineStatus)> Poller<E> {
         }
     }
 
-    fn run_active(&self, profile: Profile, started: Instant, rng: &mut impl Rng) -> Flow {
+    fn run_active(&mut self, profile: Profile, started: Instant, rng: &mut impl Rng) -> Flow {
         let _resolution = TimerResolution::begin();
         let clock = || started.elapsed();
         let mut session = Session::new(profile);
@@ -122,7 +128,18 @@ impl<E: Fn(EngineStatus)> Poller<E> {
             let due = deadlines.next(tick_start);
 
             let paused = self.paused.load(Ordering::SeqCst);
-            for job in session.tick(tick_start, paused, rng, &self.emit) {
+            let game_active = session.refresh_game(&self.emit);
+            let capture = self.key_capture.load(Ordering::SeqCst);
+            let desired = desired_tracker_hotkeys(
+                true,
+                paused,
+                capture,
+                game_active,
+                session.trackers(),
+            );
+            self.gate.sync(&desired);
+            let presses = self.drain_presses(game_active && !paused);
+            for job in session.tick(tick_start, paused, &presses, rng) {
                 let _ = self.jobs.send(job);
             }
 
@@ -135,12 +152,14 @@ impl<E: Fn(EngineStatus)> Poller<E> {
                     Ok(command) => command,
                     Err(RecvTimeoutError::Timeout) => break,
                     Err(RecvTimeoutError::Disconnected) => {
+                        self.release_hotkeys();
                         self.cancelled.cancel(session.core.clear());
                         return Flow::Exit;
                     }
                 };
                 match command {
                     Command::Activate(profile) => {
+                        self.release_hotkeys();
                         self.cancelled.cancel(session.core.clear());
                         session = Session::new(profile);
                     }
@@ -148,6 +167,7 @@ impl<E: Fn(EngineStatus)> Poller<E> {
                         self.cancelled.cancel(session.update(profile));
                     }
                     Command::Deactivate => {
+                        self.release_hotkeys();
                         self.cancelled.cancel(session.core.clear());
                         return Flow::Deactivated;
                     }
@@ -156,11 +176,29 @@ impl<E: Fn(EngineStatus)> Poller<E> {
             }
         }
     }
+
+    fn drain_presses(&self, accept: bool) -> Vec<Uuid> {
+        let mut presses = Vec::new();
+        loop {
+            match self.presses.try_recv() {
+                Ok(tracker_id) if accept => presses.push(tracker_id),
+                Ok(_) => {}
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => break,
+            }
+        }
+        presses
+    }
+
+    fn release_hotkeys(&mut self) {
+        self.gate.sync(&[]);
+        self.drain_presses(false);
+    }
 }
 
 struct Session {
     profile_id: Uuid,
     process_name: String,
+    trackers: Vec<Tracker>,
     core: EngineCore,
     foreground: ForegroundCache,
     game_active: Option<bool>,
@@ -174,6 +212,7 @@ impl Session {
         let mut session = Self {
             profile_id: profile.id,
             process_name: String::new(),
+            trackers: Vec::new(),
             core: EngineCore::default(),
             foreground: ForegroundCache::default(),
             game_active: None,
@@ -188,16 +227,15 @@ impl Session {
     /// Returns tickets of queued jobs of trackers that no longer run.
     fn update(&mut self, profile: Profile) -> Vec<u64> {
         self.process_name = profile.process_name;
-        self.core.set_trackers(&profile.trackers)
+        self.trackers = profile.trackers;
+        self.core.set_trackers(&self.trackers)
     }
 
-    fn tick(
-        &mut self,
-        now: Duration,
-        paused: bool,
-        rng: &mut impl Rng,
-        emit: &impl Fn(EngineStatus),
-    ) -> Vec<Job> {
+    fn trackers(&self) -> &[Tracker] {
+        &self.trackers
+    }
+
+    fn refresh_game(&mut self, emit: &impl Fn(EngineStatus)) -> bool {
         let game_active = self.foreground.is_process(
             foreground::foreground_ids(),
             &self.process_name,
@@ -210,12 +248,24 @@ impl Session {
                 game_active,
             });
         }
+        game_active
+    }
+
+    fn tick(
+        &mut self,
+        now: Duration,
+        paused: bool,
+        presses: &[Uuid],
+        rng: &mut impl Rng,
+    ) -> Vec<Job> {
+        let game_active = self.game_active.unwrap_or(false);
         if paused {
             // The capture session duplicates the same output, which allows one duplication.
             self.screen = None;
         }
 
         let process_name = self.process_name.clone();
+        let accepted = if game_active && !paused { presses } else { &[] };
         let Self {
             core,
             screen,
@@ -227,6 +277,7 @@ impl Session {
             now,
             paused,
             &process_name,
+            accepted,
             |points| {
                 if !game_active {
                     return None;

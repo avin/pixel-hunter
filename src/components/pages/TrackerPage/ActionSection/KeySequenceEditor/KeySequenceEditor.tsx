@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { useKeyCapture } from "@/hooks/useKeyCapture";
 import { useKeyCodesListQuery } from "@/store/api";
 import type { KeyCombo, KeyStep } from "@/store/types";
 import type { ActionEditorProps } from "../actionTypes";
@@ -22,6 +23,7 @@ const DEFAULT_STEP_DELAY_MS = { min: 100, max: 200 };
 
 export function KeySequenceEditor({ action, onChange }: Props) {
   const keyCodes = useKeyCodesListQuery();
+  const capture = useKeyCapture();
   const [isUnsupportedShown, setIsUnsupportedShown] = useState(false);
   const { steps } = action;
 
@@ -120,6 +122,8 @@ export function KeySequenceEditor({ action, onChange }: Props) {
           supportedCodes={supportedCodes}
           onRecord={addStep}
           onUnsupported={showUnsupported}
+          onPrepareRecording={capture.onPrepareRecording}
+          onRecordingChange={capture.onRecordingChange}
         >
           <Plus />
           Добавить нажатие

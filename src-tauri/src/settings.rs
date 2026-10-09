@@ -1,7 +1,7 @@
 //! Reading and writing the settings stored beside profiles.
 
 use crate::action::KeyCombo;
-use crate::config::{LastScreen, Settings};
+use crate::config::{Config, LastScreen, Settings};
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::key_codes;
@@ -24,6 +24,27 @@ pub fn accelerator(combo: &KeyCombo) -> Option<Accelerator> {
         modifiers,
         key: combo.key.clone(),
     })
+}
+
+/// Same key and the same modifier set. Modifier order does not matter.
+pub fn same_combo(left: &KeyCombo, right: &KeyCombo) -> bool {
+    match (accelerator(left), accelerator(right)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
+    }
+}
+
+pub fn tracker_uses_combo(config: &Config, combo: &KeyCombo) -> bool {
+    config
+        .profiles
+        .iter()
+        .flat_map(|profile| &profile.trackers)
+        .any(|tracker| {
+            tracker
+                .hotkey
+                .as_ref()
+                .is_some_and(|hotkey| same_combo(hotkey, combo))
+        })
 }
 
 pub fn settings(store: &ConfigStore) -> Settings {
@@ -49,6 +70,13 @@ pub fn set_pause_hotkey(
         }
     }
     store.update(|config| {
+        if let Some(combo) = &pause_hotkey {
+            if tracker_uses_combo(config, combo) {
+                return Err(AppError::Validation(
+                    "Это сочетание уже назначено отслеживанию".into(),
+                ));
+            }
+        }
         config.settings.pause_hotkey = pause_hotkey.clone();
         Ok(pause_hotkey)
     })
@@ -147,6 +175,27 @@ mod tests {
 
         assert_eq!(set_pause_hotkey(&store, None).unwrap(), None);
         assert_eq!(settings(&store).pause_hotkey, None);
+    }
+
+    #[test]
+    fn a_combo_saved_on_a_tracker_cannot_replace_the_pause_hotkey() {
+        let (_dir, store) = store_with_running_tracker();
+        let tracker_combo = combo("F5");
+        store
+            .update(|config| {
+                config.profiles[0].trackers[0].hotkey = Some(tracker_combo.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        let result = set_pause_hotkey(&store, Some(combo("F5")));
+
+        assert!(matches!(result, Err(AppError::Validation(_))));
+        assert_eq!(settings(&store).pause_hotkey, Some(combo("KeyQ")));
+        assert_eq!(
+            store.read(|config| config.profiles[0].trackers[0].hotkey.clone()),
+            Some(tracker_combo)
+        );
     }
 
     #[test]

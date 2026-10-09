@@ -15,6 +15,7 @@ import type {
   ScreenshotViewRequest,
   Tracker,
   TrackerInput,
+  Trigger,
   WindowedProcess,
   WorkPause,
 } from "./types";
@@ -97,6 +98,36 @@ export const tauriApi = createApi({
       invalidatesTags: (_result, _error, { profileId }) => [
         { type: "Profile", id: profileId },
       ],
+    }),
+    setTrackerTrigger: builder.mutation<
+      Tracker,
+      { profileId: string; trackerId: string; trigger: Trigger }
+    >({
+      query: ({ profileId, trackerId, trigger }) => ({
+        command: "tracker_set_trigger",
+        args: { profileId, trackerId, trigger },
+      }),
+      invalidatesTags: (_result, _error, { profileId }) => [
+        { type: "Profile", id: profileId },
+      ],
+    }),
+    setTrackerHotkey: builder.mutation<
+      Tracker,
+      { profileId: string; trackerId: string; hotkey: KeyCombo | null }
+    >({
+      query: ({ profileId, trackerId, hotkey }) => ({
+        command: "tracker_set_hotkey",
+        args: { profileId, trackerId, hotkey },
+      }),
+      invalidatesTags: (_result, _error, { profileId }) => [
+        { type: "Profile", id: profileId },
+      ],
+    }),
+    beginKeyCapture: builder.mutation<void, void>({
+      query: () => ({ command: "key_capture_begin" }),
+    }),
+    endKeyCapture: builder.mutation<void, void>({
+      query: () => ({ command: "key_capture_end" }),
     }),
     trackerSetRunning: builder.mutation<
       Tracker,
@@ -305,6 +336,10 @@ export const {
   useUpdateTrackerMutation,
   useDeleteTrackerMutation,
   useTrackerSetRunningMutation,
+  useSetTrackerTriggerMutation,
+  useSetTrackerHotkeyMutation,
+  useBeginKeyCaptureMutation,
+  useEndKeyCaptureMutation,
   useEngineActivateMutation,
   useEngineDeactivateMutation,
   useGetSettingsQuery,

@@ -10,6 +10,7 @@ import { useListProfilesQuery } from "@/store/api";
 import { RunToggle } from "@/components/pages/ProfilePage/RunToggle/RunToggle";
 import { DeleteTrackerDialog } from "@/components/pages/ProfilePage/DeleteTrackerDialog/DeleteTrackerDialog";
 import { ActionSection } from "./ActionSection/ActionSection";
+import { HotkeySection } from "./ConditionSection/ConditionSection";
 import { PixelsSection } from "./PixelsSection/PixelsSection";
 import { TrackerForm } from "./TrackerForm/TrackerForm";
 import { TrackerSplit } from "./TrackerSplit/TrackerSplit";
@@ -91,11 +92,15 @@ export function TrackerPage() {
       <TrackerForm key={`${profileId}/${tracker.id}`} profileId={profileId} tracker={tracker} />
       <TrackerSplit
         pixels={
-          <PixelsSection
-            profileId={profileId}
-            processName={profile.processName}
-            tracker={tracker}
-          />
+          tracker.trigger === "hotkey" ? (
+            <HotkeySection profileId={profileId} tracker={tracker} />
+          ) : (
+            <PixelsSection
+              profileId={profileId}
+              processName={profile.processName}
+              tracker={tracker}
+            />
+          )
         }
         action={<ActionSection profileId={profileId} tracker={tracker} />}
       />

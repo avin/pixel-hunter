@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react";
+import { cleanup, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { KeyStep } from "@/store/types";
 import {
@@ -191,7 +191,7 @@ describe("KeySequenceEditor", () => {
     await user.clear(delayInput(2, "максимум"));
     await user.type(delayInput(2, "максимум"), "300");
     expect(screen.queryByText(error)).not.toBeInTheDocument();
-    await user.click(screen.getByRole("heading", { name: "Действие" }));
+    await user.click(screen.getByRole("combobox", { name: "Действие" }));
 
     expect(delayInput(2, "минимум")).toHaveAccessibleDescription(error);
     expect(delayInput(2, "максимум")).toBeInvalid();
@@ -200,5 +200,26 @@ describe("KeySequenceEditor", () => {
     await user.clear(delayInput(2, "максимум"));
     await user.type(delayInput(2, "максимум"), "700");
     expect(screen.queryByText(error)).not.toBeInTheDocument();
+  });
+
+  it("captures keys while an action step is recorded", async () => {
+    const { user, backend } = await openTracker([q]);
+    const rewrite = () => screen.getByRole("button", { name: "Перезаписать шаг 1" });
+    await user.click(rewrite());
+    await waitFor(() => expect(rewrite()).toHaveAttribute("aria-pressed", "true"));
+    expect(backend.callsOf("key_capture_begin")).toHaveLength(1);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(1));
+    expect(backend.callsOf("work_pause_toggle")).toEqual([]);
+    expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false);
+
+    await user.click(addButton());
+    await user.click(await screen.findByRole("button", { name: "Нажмите клавишу…" }));
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(2));
+
+    await user.click(addButton());
+    await screen.findByRole("button", { name: "Нажмите клавишу…" });
+    cleanup();
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(3));
   });
 });

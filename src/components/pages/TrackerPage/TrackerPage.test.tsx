@@ -1,4 +1,4 @@
-import { act, cleanup, configure, getConfig, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, configure, getConfig, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Tracker } from "@/store/types";
@@ -437,6 +437,142 @@ describe("TrackerPage", () => {
     expect(nameInput()).toHaveValue("Мана");
     expect(backend.state.profiles[0].trackers[0].name).toBe("Новое имя");
     expect(backend.callsOf("engine_activate")).toHaveLength(1);
+  });
+
+  it("opens a new tracker and a saved one on pixels", async () => {
+    const { user } = renderApp(createFakeBackend({ profiles: [profileFixture()] }));
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
+    const dialog = await screen.findByRole("dialog", { name: "Новое отслеживание" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Имя" }), "Мана");
+    await user.click(within(dialog).getByRole("button", { name: "Создать" }));
+    await user.click(await screen.findByRole("link", { name: "Мана" }));
+
+    expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Пиксели");
+    expect(screen.queryByRole("heading", { name: "Пиксели" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Добавить пиксель" })).toBeInTheDocument();
+
+    cleanup();
+    const saved = renderApp(createFakeBackend({
+      profiles: [profileFixture({ trackers: [trackerFixture({ pixels: [pixelFixture()] })] })],
+    }));
+    await saved.user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await saved.user.click(screen.getByRole("link", { name: "Здоровье" }));
+    expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Пиксели");
+    expect(screen.getByRole("table", { name: "Пиксели" })).toBeInTheDocument();
+  });
+
+  it("hides pixel capture for a hotkey and shows the same pixels again", async () => {
+    const { user, backend } = await openTracker(trackerFixture({ pixels: [pixelFixture()] }));
+    expect(screen.getByRole("button", { name: "Добавить пиксель" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "Условие" }));
+    await user.click(await screen.findByRole("option", { name: "Хоткей" }));
+
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].trigger).toBe("hotkey"));
+    expect(screen.queryByRole("table", { name: "Пиксели" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Добавить пиксель" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Хоткей" })).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Хоткей" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Назначить" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("combobox", { name: "Условие" }));
+    await user.click(await screen.findByRole("option", { name: "Пиксели" }));
+    expect(await screen.findByRole("table", { name: "Пиксели" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Добавить пиксель" })).toBeInTheDocument();
+    expect(backend.state.profiles[0].trackers[0].pixels).toEqual([pixelFixture()]);
+  });
+
+  it("saves Ctrl + 1, rejects Win, and leaves the combo alone when recording is cancelled", async () => {
+    const { user, backend } = await openTracker(trackerFixture({
+      trigger: "hotkey",
+      hotkey: { modifiers: [], key: "F5" },
+    }));
+    expect(screen.getByText("F5")).toBeInTheDocument();
+
+    const assign = () => screen.findByRole("button", { name: "Назначить" });
+    await user.click(await assign());
+    await user.click(await screen.findByRole("button", { name: "Нажмите нужное сочетание..." }));
+    expect(backend.state.profiles[0].trackers[0].hotkey).toEqual({ modifiers: [], key: "F5" });
+
+    await user.click(await assign());
+    await screen.findByRole("button", { name: "Нажмите нужное сочетание..." });
+    await user.keyboard("{Meta}");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Эта клавиша не поддерживается");
+    expect(backend.state.profiles[0].trackers[0].hotkey).toEqual({ modifiers: [], key: "F5" });
+
+    await user.click(await assign());
+    await screen.findByRole("button", { name: "Нажмите нужное сочетание..." });
+    await user.keyboard("{Control>}1{/Control}");
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].hotkey).toEqual({
+      modifiers: ["ctrl"],
+      key: "Digit1",
+    }));
+    expect(screen.getByText("Ctrl + 1")).toBeInTheDocument();
+  });
+
+  it("keeps the previous combo when the shortcut is already used", async () => {
+    const { user, backend } = await openTracker(trackerFixture({
+      trigger: "hotkey",
+      hotkey: { modifiers: ["ctrl"], key: "Digit1" },
+    }));
+    backend.state.profiles[0].trackers.push(trackerFixture({
+      id: "other",
+      hotkey: { modifiers: [], key: "KeyQ" },
+    }));
+
+    await user.click(await screen.findByRole("button", { name: "Назначить" }));
+    await screen.findByRole("button", { name: "Нажмите нужное сочетание..." });
+    await user.keyboard("q");
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Это сочетание уже назначено другому отслеживанию");
+    expect(backend.state.profiles[0].trackers[0].hotkey).toEqual({ modifiers: ["ctrl"], key: "Digit1" });
+  });
+
+  it("writes the trigger at once and keeps the unsaved name", async () => {
+    const { user, backend } = await openTracker();
+    await user.type(nameInput(), " новый");
+    await user.click(screen.getByRole("combobox", { name: "Условие" }));
+    await user.click(await screen.findByRole("option", { name: "Хоткей" }));
+
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].trigger).toBe("hotkey"));
+    expect(nameInput()).toHaveValue("Здоровье новый");
+    expect(backend.callsOf("tracker_set_trigger")).toEqual([
+      { profileId: "profile-1", trackerId: "tracker-1", trigger: "hotkey" },
+    ]);
+
+    await user.click(exitLink());
+    await screen.findByRole("heading", { name: "Diablo" });
+    expect(backend.state.profiles[0].trackers[0]).toMatchObject({
+      name: "Здоровье новый",
+      trigger: "hotkey",
+    });
+  });
+
+  it("captures keys while the tracker shortcut is recorded", async () => {
+    const { user, backend } = await openTracker(trackerFixture({
+      trigger: "hotkey",
+      hotkey: { modifiers: [], key: "F5" },
+      isRunning: true,
+      action: { type: "keySequence", sound: { id: null, volumePercent: 50 }, steps: [keyStepFixture()] },
+    }));
+    await user.click(await screen.findByRole("button", { name: "Назначить" }));
+    await screen.findByRole("button", { name: "Нажмите нужное сочетание..." });
+    expect(backend.callsOf("key_capture_begin")).toHaveLength(1);
+
+    await user.keyboard("{F5}");
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(1));
+    expect(backend.callsOf("work_pause_toggle")).toEqual([]);
+    expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
+
+    await user.click(await screen.findByRole("button", { name: "Назначить" }));
+    await user.click(await screen.findByRole("button", { name: "Нажмите нужное сочетание..." }));
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(2));
+
+    await user.click(await screen.findByRole("button", { name: "Назначить" }));
+    await screen.findByRole("button", { name: "Нажмите нужное сочетание..." });
+    cleanup();
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(3));
   });
 
 });

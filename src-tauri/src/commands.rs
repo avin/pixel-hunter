@@ -1,13 +1,16 @@
+use std::sync::Arc;
+
 use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
 use crate::action::{Action, KeyCombo};
 use crate::action_sound::{self, AudioService, SoundInfo};
-use crate::config::{LastScreen, Pixel, Profile, Settings, Tracker};
+use crate::config::{LastScreen, Pixel, Profile, Settings, Tracker, Trigger};
 use crate::config_store::ConfigStore;
 use crate::engine::{Engine, WorkPause};
 use crate::error::AppResult;
 use crate::hotkey::PauseHotkeys;
+use crate::tracker_hotkeys::TrackerHotkeyLink;
 use crate::key_codes::{self, KeyCodeInfo};
 use crate::pixel_capture::{self, CaptureCommand, CaptureRequest, PixelCapture};
 use crate::processes::{self, WindowedProcess};
@@ -82,6 +85,26 @@ pub fn tracker_delete(
 }
 
 #[tauri::command]
+pub fn tracker_set_trigger(
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    trigger: Trigger,
+) -> AppResult<Tracker> {
+    profiles::set_trigger(&store, profile_id, tracker_id, trigger)
+}
+
+#[tauri::command]
+pub fn tracker_set_hotkey(
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    hotkey: Option<KeyCombo>,
+) -> AppResult<Tracker> {
+    profiles::set_hotkey(&store, profile_id, tracker_id, hotkey)
+}
+
+#[tauri::command]
 pub fn tracker_set_running(
     store: State<'_, ConfigStore>,
     profile_id: Uuid,
@@ -122,7 +145,7 @@ pub fn settings_set_last_screen(
 #[tauri::command]
 pub fn settings_set_pause_hotkey(
     store: State<'_, ConfigStore>,
-    hotkeys: State<'_, PauseHotkeys>,
+    hotkeys: State<'_, Arc<PauseHotkeys>>,
     pause_hotkey: KeyCombo,
 ) -> AppResult<KeyCombo> {
     hotkeys.lock().assign(&store, pause_hotkey)
@@ -131,19 +154,32 @@ pub fn settings_set_pause_hotkey(
 #[tauri::command]
 pub fn settings_clear_pause_hotkey(
     store: State<'_, ConfigStore>,
-    hotkeys: State<'_, PauseHotkeys>,
+    hotkeys: State<'_, Arc<PauseHotkeys>>,
 ) -> AppResult<()> {
     hotkeys.lock().clear(&store)
 }
 
 #[tauri::command]
-pub fn pause_hotkey_begin(hotkeys: State<'_, PauseHotkeys>) {
+pub fn pause_hotkey_begin(hotkeys: State<'_, Arc<PauseHotkeys>>) {
     hotkeys.lock().begin_assign();
 }
 
 #[tauri::command]
-pub fn pause_hotkey_cancel(hotkeys: State<'_, PauseHotkeys>) {
+pub fn pause_hotkey_cancel(hotkeys: State<'_, Arc<PauseHotkeys>>) {
     hotkeys.lock().cancel_assign();
+}
+
+/// Hides tracker shortcuts and the pause shortcut while a key is being recorded.
+#[tauri::command]
+pub fn key_capture_begin(hotkeys: State<'_, Arc<PauseHotkeys>>, trackers: State<'_, TrackerHotkeyLink>) {
+    trackers.begin_capture();
+    hotkeys.begin_capture();
+}
+
+#[tauri::command]
+pub fn key_capture_end(hotkeys: State<'_, Arc<PauseHotkeys>>, trackers: State<'_, TrackerHotkeyLink>) {
+    hotkeys.end_capture();
+    trackers.end_capture();
 }
 
 #[tauri::command]
@@ -196,14 +232,18 @@ pub async fn action_sound_stop_preview(audio: State<'_, AudioService>) -> AppRes
 #[tauri::command]
 pub fn debug_run_action(
     store: State<'_, ConfigStore>,
+    gate: State<'_, Arc<crate::tracker_hotkeys::ShortcutGate>>,
+    hotkeys: State<'_, Arc<PauseHotkeys>>,
     profile_id: Uuid,
     tracker_id: Uuid,
 ) -> AppResult<()> {
     let action = profiles::get_action(&store, profile_id, tracker_id)?;
     let process_name = profiles::profile_process_name(&store, profile_id, tracker_id)?;
+    let gate = Arc::clone(gate.inner());
+    let hotkeys = Arc::clone(hotkeys.inner());
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(3));
-        if let Err(error) = crate::engine::perform_action(&action, &process_name) {
+        if let Err(error) = crate::engine::perform_action(&action, &process_name, &gate, hotkeys.as_ref()) {
             eprintln!("Действие не выполнено: {error}");
         }
     });

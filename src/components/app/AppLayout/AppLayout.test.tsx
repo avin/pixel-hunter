@@ -1,5 +1,5 @@
 import { emit } from "@tauri-apps/api/event";
-import { act, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { WORK_PAUSE_EVENT } from "@/hooks/useWorkEvents";
 import {
@@ -285,5 +285,28 @@ describe("work pause", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Работает" })).toBeInTheDocument();
     expect(backend.callsOf("work_pause_toggle")).toEqual([]);
+  });
+
+  it("captures keys while the pause shortcut is recorded", async () => {
+    const backend = createFakeBackend({ settings: savedHotkey });
+    const { user } = renderApp(backend);
+    await user.click(await screen.findByRole("button", { name: "Настроить паузу" }));
+    const dialog = await screen.findByRole("dialog", { name: "Сочетание для паузы" });
+
+    await user.click(await within(dialog).findByRole("button", { name: "Назначить" }));
+    await within(dialog).findByRole("button", { name: "Нажмите нужное сочетание..." });
+    expect(backend.callsOf("key_capture_begin")).toHaveLength(1);
+    await user.keyboard("w");
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(1));
+    expect(backend.callsOf("work_pause_toggle")).toEqual([]);
+
+    await user.click(within(dialog).getByRole("button", { name: "Назначить" }));
+    await user.click(await within(dialog).findByRole("button", { name: "Нажмите нужное сочетание..." }));
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(2));
+
+    await user.click(within(dialog).getByRole("button", { name: "Назначить" }));
+    await within(dialog).findByRole("button", { name: "Нажмите нужное сочетание..." });
+    cleanup();
+    await waitFor(() => expect(backend.callsOf("key_capture_end")).toHaveLength(3));
   });
 });

@@ -92,7 +92,7 @@ describe("ActionSection", () => {
     await user.click(screen.getByRole("button", { name: "Создать" }));
     await user.click(await screen.findByRole("link", { name: "Здоровье" }));
 
-    const typeSelect = screen.getByRole("combobox", { name: "Тип" });
+    const typeSelect = screen.getByRole("combobox", { name: "Действие" });
     expect(typeSelect).toHaveTextContent("Нажатие клавиш");
     expect(await screen.findByText("Нажатия не настроены")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Добавить нажатие" })).toBeEnabled();
@@ -108,14 +108,14 @@ describe("ActionSection", () => {
   const actionRegion = () => within(screen.getByRole("region", { name: "Действие" }));
 
   async function chooseType(user: UserEvent, name: string) {
-    await user.click(screen.getByRole("combobox", { name: "Тип" }));
+    await user.click(screen.getByRole("combobox", { name: "Действие" }));
     await user.click(await screen.findByRole("option", { name }));
   }
 
   it("lists both action types and explains a network disconnect without inputs", async () => {
     const { user } = await openTracker();
 
-    await user.click(screen.getByRole("combobox", { name: "Тип" }));
+    await user.click(screen.getByRole("combobox", { name: "Действие" }));
     expect(await screen.findByRole("option", { name: "Нажатие клавиш" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Разрыв сетевого соединения" })).toBeInTheDocument();
     await user.click(screen.getByRole("option", { name: "Разрыв сетевого соединения" }));
@@ -170,7 +170,7 @@ describe("ActionSection", () => {
     await user.click(within(await screen.findByRole("alertdialog", { name: "Сменить тип действия?" })).getByRole("button", { name: "Отмена" }));
 
     expect(screen.queryByRole("alertdialog", { name: "Сменить тип действия?" })).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Тип" })).toHaveTextContent("Нажатие клавиш");
+    expect(screen.getByRole("combobox", { name: "Действие" })).toHaveTextContent("Нажатие клавиш");
     expect(screen.getByRole("table", { name: "Шаги последовательности" })).toHaveTextContent("Q");
     expect(keySequenceSteps(backend.state.profiles[0].trackers[0].action)).toHaveLength(1);
   });
@@ -230,7 +230,7 @@ describe("ActionSection", () => {
 
     await waitFor(() => {
       expect(backend.state.profiles[0].trackers[0].action.type).toBe("networkDisconnect");
-      expect(screen.getByRole("combobox", { name: "Тип" })).toHaveTextContent("Разрыв сетевого соединения");
+      expect(screen.getByRole("combobox", { name: "Действие" })).toHaveTextContent("Разрыв сетевого соединения");
       expect(running()).toHaveAttribute("aria-pressed", "true");
       expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true);
     });

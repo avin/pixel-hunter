@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useKeyCapture } from "@/hooks/useKeyCapture";
 import { comboLabel } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/comboLabel";
 import { KeyRecorder } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/KeyRecorder/KeyRecorder";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ export function PauseHotkeyDialog({ onClose }: Props) {
   const [beginHotkey] = useBeginPauseHotkeyMutation();
   const [cancelHotkey] = useCancelPauseHotkeyMutation();
   const [isRejected, setIsRejected] = useState(false);
+  const capture = useKeyCapture();
   const began = useRef(false);
   const cancelHotkeyRef = useRef(cancelHotkey);
   cancelHotkeyRef.current = cancelHotkey;
@@ -51,10 +53,18 @@ export function PauseHotkeyDialog({ onClose }: Props) {
   async function onPrepareRecording() {
     setIsRejected(false);
     await beginHotkey().unwrap();
+    try {
+      await capture.onPrepareRecording();
+    } catch (error) {
+      began.current = false;
+      void cancelHotkey();
+      throw error;
+    }
     began.current = true;
   }
 
   function onRecordingChange(isRecording: boolean) {
+    capture.onRecordingChange(isRecording);
     if (!isRecording && began.current) {
       began.current = false;
       void cancelHotkey();

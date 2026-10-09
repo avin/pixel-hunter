@@ -38,7 +38,6 @@ export function ActionSection({ profileId, tracker }: Props) {
   const dispatch = useAppDispatch();
   const key = actionEditKey(profileId, tracker.id);
   const edit = useAppSelector((state) => state.actionEdits[key]);
-  const headingId = useId();
   const typeLabelId = useId();
   const typeId = useId();
   const action = edit?.action ?? tracker.action;
@@ -61,46 +60,44 @@ export function ActionSection({ profileId, tracker }: Props) {
   }
 
   return (
-    <section aria-labelledby={headingId} className="flex min-h-0 flex-col gap-2 overflow-hidden border p-2">
-      <h2 id={headingId} className="font-heading text-sm font-medium">
-        Действие
-      </h2>
-
-      <div className="flex flex-wrap items-center justify-between gap-3">
+    <section aria-label="Действие" className="flex min-h-0 flex-col overflow-hidden border">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
-        <Label id={typeLabelId} htmlFor={typeId}>Тип</Label>
-        <Select
-          items={TYPE_LABELS}
-          value={action.type}
-          onValueChange={(type) => {
-            if (type) changeType(type);
-          }}
-        >
-          <SelectTrigger id={typeId} aria-labelledby={typeLabelId}>
-            <span className="grid">
-              <span aria-hidden className="invisible col-start-1 row-start-1 grid">
-                {Object.values(TYPE_LABELS).map((label) => (
-                  <span key={label} className="col-start-1 row-start-1 whitespace-nowrap">
-                    {label}
-                  </span>
-                ))}
+          <Label id={typeLabelId} htmlFor={typeId}>Действие</Label>
+          <Select
+            items={TYPE_LABELS}
+            value={action.type}
+            onValueChange={(type) => {
+              if (type) changeType(type);
+            }}
+          >
+            <SelectTrigger id={typeId} size="sm" aria-labelledby={typeLabelId}>
+              <span className="grid">
+                <span aria-hidden className="invisible col-start-1 row-start-1 grid">
+                  {Object.values(TYPE_LABELS).map((label) => (
+                    <span key={label} className="col-start-1 row-start-1 whitespace-nowrap">
+                      {label}
+                    </span>
+                  ))}
+                </span>
+                <SelectValue className="col-start-1 row-start-1" />
               </span>
-              <SelectValue className="col-start-1 row-start-1" />
-            </span>
-          </SelectTrigger>
-          <SelectContent align="start" alignItemWithTrigger={false} className="w-max min-w-(--anchor-width)">
-            {Object.entries(TYPE_LABELS).map(([type, label]) => (
-              <SelectItem key={type} value={type}>
-                {label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+            </SelectTrigger>
+            <SelectContent align="start" alignItemWithTrigger={false} className="w-max min-w-(--anchor-width)">
+              {Object.entries(TYPE_LABELS).map(([type, label]) => (
+                <SelectItem key={type} value={type}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
         <SoundSettings key={key} sound={action.sound} onChange={(sound) => updateAction({ ...action, sound })} />
       </div>
-      {edit?.error && <div role="alert" className="flex items-center gap-2 text-xs text-destructive"><span>Не удалось сохранить действие: {edit.error}</span><Button variant="outline" size="sm" onClick={() => void dispatch(saveDesiredAction(profileId, tracker.id))}>Повторить сохранение</Button></div>}
-      <ActionEditor profileId={profileId} trackerId={tracker.id} action={action} onChange={updateAction} />
+      <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden p-2">
+        {edit?.error && <div role="alert" className="flex items-center gap-2 text-xs text-destructive"><span>Не удалось сохранить действие: {edit.error}</span><Button variant="outline" size="sm" onClick={() => void dispatch(saveDesiredAction(profileId, tracker.id))}>Повторить сохранение</Button></div>}
+        <ActionEditor profileId={profileId} trackerId={tracker.id} action={action} onChange={updateAction} />
+      </div>
       {pendingType && (
         <AlertDialog open onOpenChange={(isOpen) => { if (!isOpen) setPendingType(null); }}>
           <AlertDialogContent>

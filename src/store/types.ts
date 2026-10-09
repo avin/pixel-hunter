@@ -80,12 +80,17 @@ export interface KeyCodeInfo {
   label: string;
 }
 
+export type Trigger = "pixels" | "hotkey";
+
 export interface Tracker {
   id: string;
   name: string;
   preActionDelayMs: DelayRange;
   resumeDelayMs: number;
   pixels: Pixel[];
+  /** Missing data from an older config means pixels. */
+  trigger: Trigger;
+  hotkey: KeyCombo | null;
   action: Action;
   /** Saved choice of the user; only a complete tracker can be running. */
   isRunning: boolean;

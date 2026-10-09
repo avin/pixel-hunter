@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use super::color::pixel_passes;
 use crate::action::Action;
-use crate::config::{Rgb, Tracker};
+use crate::config::{Rgb, Tracker, Trigger};
 
 /// Action handed to the executor; `ticket` tells this run apart from later runs of the tracker.
 #[derive(Debug, Clone, PartialEq)]
@@ -81,6 +81,7 @@ impl EngineCore {
         now: Duration,
         paused: bool,
         process_name: &str,
+        presses: &[Uuid],
         read: impl FnOnce(&[(u32, u32)]) -> Option<Vec<Rgb>>,
         rng: &mut impl Rng,
     ) -> Vec<Job> {
@@ -94,6 +95,9 @@ impl EngineCore {
 
         if !paused {
             self.observe(now, read, rng);
+            for tracker_id in presses {
+                self.press(*tracker_id, now, false, rng);
+            }
         }
 
         let mut jobs = Vec::new();
@@ -115,6 +119,25 @@ impl EngineCore {
         jobs
     }
 
+    /// A hotkey press enters the same pre-action delay as a pixel match. Presses during a pause,
+    /// or while this run is already in the cycle, do nothing.
+    pub fn press(&mut self, tracker_id: Uuid, now: Duration, paused: bool, rng: &mut impl Rng) {
+        if paused {
+            return;
+        }
+        let Some(run) = self
+            .runs
+            .iter_mut()
+            .find(|run| run.tracker.id == tracker_id)
+        else {
+            return;
+        };
+        if run.tracker.trigger != Trigger::Hotkey || run.phase != Phase::Polling {
+            return;
+        }
+        enter_pre_delay(run, now, rng);
+    }
+
     pub fn action_done(&mut self, ticket: u64, now: Duration) {
         if let Some(run) = self
             .runs
@@ -133,7 +156,7 @@ impl EngineCore {
         rng: &mut impl Rng,
     ) {
         let points: Vec<_> = self
-            .polling()
+            .polling_pixels()
             .flat_map(|run| run.tracker.pixels.iter().map(|pixel| (pixel.x, pixel.y)))
             .collect();
         if points.is_empty() {
@@ -144,11 +167,7 @@ impl EngineCore {
         };
 
         let mut colors = colors.into_iter();
-        for run in self
-            .runs
-            .iter_mut()
-            .filter(|run| run.phase == Phase::Polling)
-        {
+        for run in self.runs.iter_mut().filter(|run| is_pixel_poll(run)) {
             let samples: Vec<_> = colors.by_ref().take(run.tracker.pixels.len()).collect();
             let all_passed = run
                 .tracker
@@ -157,18 +176,26 @@ impl EngineCore {
                 .zip(samples)
                 .all(|(pixel, sample)| pixel_passes(sample, pixel));
             if all_passed {
-                let range = run.tracker.pre_action_delay_ms;
-                let delay = rng.random_range(range.min..=range.max);
-                run.phase = Phase::PreDelay {
-                    until: now + Duration::from_millis(delay.into()),
-                };
+                enter_pre_delay(run, now, rng);
             }
         }
     }
 
-    fn polling(&self) -> impl Iterator<Item = &Run> {
-        self.runs.iter().filter(|run| run.phase == Phase::Polling)
+    fn polling_pixels(&self) -> impl Iterator<Item = &Run> {
+        self.runs.iter().filter(|run| is_pixel_poll(run))
     }
+}
+
+fn is_pixel_poll(run: &Run) -> bool {
+    run.phase == Phase::Polling && run.tracker.trigger == Trigger::Pixels
+}
+
+fn enter_pre_delay(run: &mut Run, now: Duration, rng: &mut impl Rng) {
+    let range = run.tracker.pre_action_delay_ms;
+    let delay = rng.random_range(range.min..=range.max);
+    run.phase = Phase::PreDelay {
+        until: now + Duration::from_millis(delay.into()),
+    };
 }
 
 fn queued_tickets(runs: &[Run]) -> Vec<u64> {
@@ -184,7 +211,7 @@ fn queued_tickets(runs: &[Run]) -> Vec<u64> {
 mod tests {
     use super::*;
     use crate::action::{ActionKind, KeyCombo, KeySequenceAction, KeyStep};
-    use crate::config::{DelayRange, Pixel, PixelCondition};
+    use crate::config::{DelayRange, Pixel, PixelCondition, Trigger};
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
@@ -225,6 +252,16 @@ mod tests {
         tracker
     }
 
+    fn hotkey_tracker(delay: (u32, u32), resume_delay_ms: u32) -> Tracker {
+        let mut tracker = tracker(&[(1, 1)], delay, resume_delay_ms);
+        tracker.trigger = Trigger::Hotkey;
+        tracker.hotkey = Some(KeyCombo {
+            modifiers: vec![],
+            key: "F5".into(),
+        });
+        tracker
+    }
+
     /// Drives the core like the poll thread does, with a virtual clock.
     struct Harness {
         core: EngineCore,
@@ -259,6 +296,11 @@ mod tests {
             self.screen.push((point, color));
         }
 
+        fn press(&mut self, id: Uuid, now: Duration) {
+            let paused = self.paused;
+            self.core.press(id, now, paused, &mut self.rng);
+        }
+
         fn tick(&mut self, now: Duration) -> Vec<Job> {
             let Self {
                 core,
@@ -274,6 +316,7 @@ mod tests {
                 now,
                 *paused,
                 process_name,
+                &[],
                 |points| {
                     if !*game_active || *screen_fails {
                         return None;
@@ -729,11 +772,101 @@ mod tests {
             ms(0),
             false,
             "game.exe",
+            &[],
             |_| Some(vec![RED]),
             &mut StdRng::seed_from_u64(0),
         );
 
         assert!(jobs.is_empty());
+    }
+
+    #[test]
+    fn a_hotkey_trackers_saved_pixels_do_not_start_a_run() {
+        let hotkey = hotkey_tracker((0, 0), 0);
+        let mut h = Harness::new(&[hotkey]);
+        h.paint((1, 1), RED);
+
+        assert!(h.tick(ms(0)).is_empty());
+        assert!(
+            h.reads.is_empty(),
+            "a hotkey tracker does not ask for a screen snapshot"
+        );
+
+        let pixels = tracker(&[(1, 1)], (0, 0), 0);
+        h.core.set_trackers(&[pixels]);
+        assert_eq!(h.tick(ms(50)).len(), 1);
+        assert_eq!(h.reads, [vec![(1, 1)]]);
+    }
+
+    #[test]
+    fn a_hotkey_press_waits_the_delay_and_ignores_repeats_until_the_pause_ends() {
+        let hotkey = hotkey_tracker((100, 100), 1000);
+        let mut h = Harness::new(&[hotkey.clone()]);
+
+        h.press(hotkey.id, ms(0));
+        assert!(h.tick(ms(0)).is_empty());
+        let jobs = h.run(50, 100);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].0, 100);
+        assert_eq!(jobs[0].1.action, hotkey.action);
+
+        h.press(hotkey.id, ms(150));
+        assert!(h.tick(ms(150)).is_empty(), "a press while queued does nothing");
+        h.core.action_done(jobs[0].1.ticket, ms(200));
+        h.press(hotkey.id, ms(250));
+        assert!(
+            h.run(250, 1200).is_empty(),
+            "a press during the resume pause does not start another run"
+        );
+
+        h.press(hotkey.id, ms(1200));
+        let next = h.run(1200, 1300);
+        assert_eq!(next.len(), 1);
+        assert_eq!(next[0].0, 1300);
+    }
+
+    #[test]
+    fn a_hotkey_with_zero_pause_accepts_the_next_press_after_the_action() {
+        let hotkey = hotkey_tracker((0, 0), 0);
+        let mut h = Harness::new(&[hotkey.clone()]);
+
+        h.press(hotkey.id, ms(0));
+        let first = h.tick(ms(0));
+        assert_eq!(first.len(), 1);
+        h.press(hotkey.id, ms(10));
+        assert!(h.tick(ms(10)).is_empty());
+
+        h.core.action_done(first[0].ticket, ms(20));
+        assert!(h.tick(ms(50)).is_empty(), "zero pause returns to waiting for a press");
+        h.press(hotkey.id, ms(50));
+        assert_eq!(h.tick(ms(50)).len(), 1);
+    }
+
+    #[test]
+    fn a_press_during_pause_does_not_queue_and_a_waiting_delay_finishes_without_another_press() {
+        let hotkey = hotkey_tracker((100, 100), 0);
+        let mut h = Harness::new(&[hotkey.clone()]);
+        h.press(hotkey.id, ms(0));
+
+        h.paused = true;
+        h.press(hotkey.id, ms(50));
+        assert!(h.run(50, 400).is_empty());
+
+        h.paused = false;
+        let jobs = h.tick(ms(450));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].tracker_id, hotkey.id);
+
+        let idle = hotkey_tracker((0, 0), 0);
+        let mut waiting = Harness::new(&[idle.clone()]);
+        waiting.paused = true;
+        waiting.press(idle.id, ms(0));
+        assert!(waiting.run(0, 100).is_empty());
+        waiting.paused = false;
+        assert!(
+            waiting.tick(ms(150)).is_empty(),
+            "a press during pause is not remembered"
+        );
     }
 
     #[test]

@@ -1,8 +1,9 @@
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::action::Action;
-use crate::config::{Config, DelayRange, Pixel, PixelCondition, Profile, Tracker};
+use crate::action::{Action, KeyCombo};
+use crate::config::{Config, DelayRange, Pixel, PixelCondition, Profile, Tracker, Trigger};
+use crate::settings;
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::screenshots::Screenshots;
@@ -112,6 +113,85 @@ pub fn update_action(
         tracker.stop_if_incomplete();
         Ok(action)
     })
+}
+
+/// Switches the condition. Pixels and the saved combo stay where they are.
+pub fn set_trigger(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    trigger: Trigger,
+) -> AppResult<Tracker> {
+    store.update(|config| {
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        tracker.trigger = trigger;
+        tracker.stop_if_incomplete();
+        Ok(tracker.clone())
+    })
+}
+
+/// Writes one combo, or clears it. A combo already used by the pause hotkey or by another
+/// tracker of this profile is rejected and the previous value stays.
+pub fn set_hotkey(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    hotkey: Option<KeyCombo>,
+) -> AppResult<Tracker> {
+    store.update(|config| {
+        let normalized = match hotkey {
+            None => None,
+            Some(combo) => Some(normalize_hotkey(config, profile_id, tracker_id, combo)?),
+        };
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        tracker.hotkey = normalized;
+        tracker.stop_if_incomplete();
+        Ok(tracker.clone())
+    })
+}
+
+fn normalize_hotkey(
+    config: &Config,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    combo: KeyCombo,
+) -> AppResult<KeyCombo> {
+    let Some(accelerator) = settings::accelerator(&combo) else {
+        return Err(AppError::Validation("Эта клавиша не поддерживается".into()));
+    };
+    let normalized = KeyCombo {
+        modifiers: accelerator.modifiers,
+        key: accelerator.key,
+    };
+    if config
+        .settings
+        .pause_hotkey
+        .as_ref()
+        .is_some_and(|pause| settings::same_combo(pause, &normalized))
+    {
+        return Err(AppError::Validation(
+            "Это сочетание уже назначено паузе".into(),
+        ));
+    }
+    let taken = config
+        .profiles
+        .iter()
+        .find(|profile| profile.id == profile_id)
+        .is_some_and(|profile| {
+            profile.trackers.iter().any(|other| {
+                other.id != tracker_id
+                    && other
+                        .hotkey
+                        .as_ref()
+                        .is_some_and(|hotkey| settings::same_combo(hotkey, &normalized))
+            })
+        });
+    if taken {
+        return Err(AppError::Validation(
+            "Это сочетание уже назначено другому отслеживанию".into(),
+        ));
+    }
+    Ok(normalized)
 }
 
 /// Saves whether the tracker should run; an incomplete tracker cannot be started.
@@ -913,6 +993,171 @@ mod tests {
 
         update_action(&fixture.store, profile.id, tracker.id, key_sequence(&[])).unwrap();
         assert!(!is_running(&fixture));
+    }
+
+    #[test]
+    fn hotkey_without_pixels_stays_complete_and_an_unready_variant_stops_it() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, _) = complete_tracker(&fixture, profile.id);
+        set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
+        let combo = KeyCombo {
+            modifiers: vec![crate::action::Modifier::Ctrl],
+            key: "Digit1".into(),
+        };
+
+        fixture
+            .store
+            .update(|config| {
+                let tracker = &mut config.profiles[0].trackers[0];
+                tracker.trigger = Trigger::Hotkey;
+                tracker.hotkey = Some(combo.clone());
+                tracker.pixels.clear();
+                tracker.stop_if_incomplete();
+                assert!(tracker.is_complete());
+                Ok(())
+            })
+            .unwrap();
+        assert!(is_running(&fixture));
+
+        fixture
+            .store
+            .update(|config| {
+                let tracker = &mut config.profiles[0].trackers[0];
+                tracker.hotkey = None;
+                tracker.stop_if_incomplete();
+                assert_eq!(tracker.missing_part(), Some(crate::config::MissingPart::Hotkey));
+                Ok(())
+            })
+            .unwrap();
+        assert!(!is_running(&fixture));
+
+        fixture
+            .store
+            .update(|config| {
+                let tracker = &mut config.profiles[0].trackers[0];
+                tracker.trigger = Trigger::Pixels;
+                tracker.pixels.push(Pixel::new(
+                    Uuid::new_v4(),
+                    0,
+                    0,
+                    Rgb { r: 0, g: 0, b: 0 },
+                ));
+                tracker.hotkey = Some(combo);
+                tracker.is_running = true;
+                tracker.stop_if_incomplete();
+                Ok(())
+            })
+            .unwrap();
+        assert!(is_running(&fixture));
+
+        fixture
+            .store
+            .update(|config| {
+                let tracker = &mut config.profiles[0].trackers[0];
+                tracker.trigger = Trigger::Hotkey;
+                tracker.hotkey = None;
+                tracker.stop_if_incomplete();
+                Ok(())
+            })
+            .unwrap();
+        assert!(!is_running(&fixture));
+    }
+
+    fn combo(modifiers: &[&str], key: &str) -> KeyCombo {
+        KeyCombo {
+            modifiers: modifiers
+                .iter()
+                .map(|name| match *name {
+                    "ctrl" => crate::action::Modifier::Ctrl,
+                    "shift" => crate::action::Modifier::Shift,
+                    "alt" => crate::action::Modifier::Alt,
+                    _ => unreachable!(),
+                })
+                .collect(),
+            key: key.into(),
+        }
+    }
+
+    #[test]
+    fn trigger_keeps_pixels_and_the_combo_and_hotkey_conflicts_stay_on_the_previous_value() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let other = fixture.profile("PoE");
+        let (tracker, pixel) = complete_tracker(&fixture, profile.id);
+        let (other_tracker, _) = complete_tracker(&fixture, other.id);
+        let second = create_tracker(&fixture.store, profile.id, "Мана".into()).unwrap();
+        settings::set_pause_hotkey(
+            &fixture.store,
+            Some(combo(&["ctrl"], "KeyP")),
+        )
+        .unwrap();
+
+        let saved = set_hotkey(
+            &fixture.store,
+            other.id,
+            other_tracker.id,
+            Some(combo(&[], "F5")),
+        )
+        .unwrap();
+        assert_eq!(saved.hotkey.as_ref().map(|item| item.key.as_str()), Some("F5"));
+
+        let saved = set_hotkey(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            Some(combo(&[], "F5")),
+        )
+        .unwrap();
+        assert_eq!(saved.hotkey.as_ref().map(|item| item.key.as_str()), Some("F5"));
+
+        let conflict = set_hotkey(
+            &fixture.store,
+            profile.id,
+            second.id,
+            Some(combo(&[], "F5")),
+        );
+        assert!(matches!(conflict, Err(AppError::Validation(_))));
+        assert_eq!(fixture.reloaded()[0].trackers[1].hotkey, None);
+
+        set_hotkey(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            Some(combo(&["ctrl", "shift"], "Digit1")),
+        )
+        .unwrap();
+        let reversed = set_hotkey(
+            &fixture.store,
+            profile.id,
+            second.id,
+            Some(combo(&["shift", "ctrl"], "Digit1")),
+        );
+        assert!(matches!(reversed, Err(AppError::Validation(_))));
+        assert_eq!(fixture.reloaded()[0].trackers[1].hotkey, None);
+
+        let pause = set_hotkey(
+            &fixture.store,
+            profile.id,
+            second.id,
+            Some(combo(&["ctrl"], "KeyP")),
+        );
+        assert!(matches!(pause, Err(AppError::Validation(_))));
+        assert_eq!(fixture.reloaded()[0].trackers[1].hotkey, None);
+        assert_eq!(
+            fixture.reloaded()[0].trackers[0].hotkey.as_ref().map(|item| item.key.as_str()),
+            Some("Digit1")
+        );
+
+        let switched = set_trigger(&fixture.store, profile.id, tracker.id, Trigger::Hotkey).unwrap();
+        assert_eq!(switched.trigger, Trigger::Hotkey);
+        assert_eq!(switched.pixels, [pixel.clone()]);
+        assert!(switched.hotkey.is_some());
+
+        let back = set_trigger(&fixture.store, profile.id, tracker.id, Trigger::Pixels).unwrap();
+        assert_eq!(back.trigger, Trigger::Pixels);
+        assert_eq!(back.pixels, [pixel]);
+        assert_eq!(back.hotkey.as_ref().map(|item| item.key.as_str()), Some("Digit1"));
     }
 
     #[test]
