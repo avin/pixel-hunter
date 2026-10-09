@@ -7,6 +7,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { actionEditKey, saveDesiredAction, setDesiredAction } from "@/store/actionEditsSlice";
 import { useAppDispatch, useAppSelector } from "@/store/hooks";
 import type { Action, ActionType, Tracker } from "@/store/types";
@@ -28,6 +29,7 @@ export function ActionSection({ profileId, tracker }: Props) {
   const edit = useAppSelector((state) => state.actionEdits[key]);
   const headingId = useId();
   const typeLabelId = useId();
+  const typeId = useId();
   const action = edit?.action ?? tracker.action;
   const { Editor } = actionTypes[action.type];
   function updateAction(next: Action) {
@@ -43,9 +45,7 @@ export function ActionSection({ profileId, tracker }: Props) {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-        <span id={typeLabelId} className="text-sm font-medium">
-          Тип
-        </span>
+        <Label id={typeLabelId} htmlFor={typeId}>Тип</Label>
         <Select
           items={TYPE_LABELS}
           value={action.type}
@@ -55,7 +55,7 @@ export function ActionSection({ profileId, tracker }: Props) {
             }
           }}
         >
-          <SelectTrigger aria-labelledby={typeLabelId}>
+          <SelectTrigger id={typeId} aria-labelledby={typeLabelId}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent alignItemWithTrigger={false}>

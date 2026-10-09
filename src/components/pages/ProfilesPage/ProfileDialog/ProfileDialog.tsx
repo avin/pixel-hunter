@@ -152,7 +152,7 @@ export function ProfileDialog({ profile, onClose }: Props) {
                 >
                   <SelectTrigger
                     id={ids.process}
-                    className="min-w-0 flex-1"
+                    className="min-w-0 flex-1 font-mono data-placeholder:font-sans"
                     aria-labelledby={ids.processLabel}
                     aria-invalid={processError ? true : undefined}
                     aria-describedby={processError ? ids.processError : undefined}

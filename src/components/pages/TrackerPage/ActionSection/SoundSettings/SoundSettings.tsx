@@ -3,6 +3,7 @@ import { ChevronDown, Play } from "lucide-react";
 import { useEffect, useId, useRef, useState } from "react";
 import { cn } from "cn";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useActionSoundsListQuery, useActionSoundPreviewMutation, useActionSoundStopPreviewMutation } from "@/store/api";
 import type { SoundSettings as Settings } from "@/store/types";
@@ -23,6 +24,7 @@ export function SoundSettings({ sound, onChange }: Props) {
   const request = useRef(0);
   const volumeId = useId();
   const labelId = useId();
+  const soundId = useId();
 
   useEffect(() => {
     mounted.current = true;
@@ -76,9 +78,9 @@ export function SoundSettings({ sound, onChange }: Props) {
   return (
     <div className="ml-auto flex min-w-0 flex-col gap-1">
       <div className="flex flex-wrap items-center gap-2">
-        <span id={labelId} className="text-sm font-medium">Звук</span>
+        <Label id={labelId} htmlFor={soundId}>Звук</Label>
         <Popover.Root open={isOpen} onOpenChange={setIsOpen}>
-          <Popover.Trigger render={<Button variant="outline" />} role="combobox" aria-haspopup="dialog" aria-labelledby={labelId} className="min-w-32 justify-between gap-2">
+          <Popover.Trigger id={soundId} render={<Button variant="outline" />} role="combobox" aria-haspopup="dialog" aria-labelledby={labelId} className="min-w-32 justify-between gap-2">
             {name}<ChevronDown className="size-3" />
           </Popover.Trigger>
           <Popover.Portal>
@@ -133,7 +135,7 @@ export function SoundSettings({ sound, onChange }: Props) {
             }}
             className="w-20 accent-primary focus-visible:outline focus-visible:outline-ring disabled:opacity-50"
           />
-          <span aria-hidden="true" className="w-9 text-right text-xs tabular-nums">{sound.volumePercent}%</span>
+          <span aria-hidden="true" className="w-9 text-right font-mono text-xs tabular-nums">{sound.volumePercent}%</span>
         </div>
       </div>
       {error && <p role="alert" className="text-xs text-destructive">{error}</p>}

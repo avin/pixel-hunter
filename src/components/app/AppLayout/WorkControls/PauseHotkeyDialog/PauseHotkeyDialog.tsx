@@ -77,7 +77,7 @@ export function PauseHotkeyDialog({ onClose }: Props) {
               {hotkey ? (
                 <>
                   Сейчас назначено{" "}
-                  <strong className="font-bold">{comboLabel(hotkey, labels)}</strong>.
+                  <span className="font-mono text-foreground">{comboLabel(hotkey, labels)}</span>.
                 </>
               ) : (
                 "Сочетание не назначено."

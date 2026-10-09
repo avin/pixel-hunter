@@ -159,7 +159,7 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
             aria-label={`Допуск пикселя ${point}, %`}
             aria-invalid={toleranceError ? true : undefined}
             aria-describedby={toleranceError ? toleranceErrorId : undefined}
-            className="h-7 w-20 font-mono tabular-nums"
+            className="h-7 w-20"
             onChange={(event) => {
               form.setValue("tolerance", event.currentTarget.value);
               reveal.change("tolerance");

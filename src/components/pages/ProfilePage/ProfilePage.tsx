@@ -80,7 +80,7 @@ export function ProfilePage() {
       <div className="flex shrink-0 items-center justify-between gap-2">
         <p className="min-w-0 truncate text-sm text-muted-foreground">
           Процесс:{" "}
-          <span className="text-foreground">{profile.processName}</span>
+          <span className="font-mono text-foreground">{profile.processName}</span>
         </p>
         <div className="flex shrink-0 items-center gap-1">
           <Button

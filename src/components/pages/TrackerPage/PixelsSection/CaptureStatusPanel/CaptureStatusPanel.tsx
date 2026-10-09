@@ -32,7 +32,7 @@ export function CaptureStatusPanel({ status, processName, onCancel, onDismiss }:
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <p role="status" aria-label="Состояние захвата">{phaseMessage(status, processName)}</p>
         {status.phase === "waitingForGame" && (
-          <span className="shrink-0 font-mono font-medium tabular-nums">
+          <span className="shrink-0 font-mono tabular-nums">
             {formatRemaining(status.remainingMs)}
           </span>
         )}

@@ -49,7 +49,7 @@ export function StepDelay({ stepNumber, delay, onSave }: Props) {
         aria-label={`Задержка перед шагом ${stepNumber}: ${label}, мс`}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
-        className="h-7 w-20 font-mono tabular-nums"
+        className="h-7 w-20"
         onChange={(event) => {
           form.setValue(field, event.currentTarget.value);
           reveal.change("delay");
@@ -74,9 +74,9 @@ export function StepDelay({ stepNumber, delay, onSave }: Props) {
       }}
     >
       <legend className="sr-only">Задержка перед шагом {stepNumber}, мс</legend>
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="flex items-center gap-2 text-xs">
         {input("min", "минимум")}
-        <span aria-hidden>–</span>
+        <span aria-hidden className="font-mono text-muted-foreground">–</span>
         {input("max", "максимум")}
       </div>
       {error && <FieldError id={errorId}>{error}</FieldError>}

@@ -219,7 +219,7 @@ export function TrackerForm({ profileId, tracker }: Props) {
                 onChange={setField("delayMin", "preActionDelay")}
               />
             </Field>
-            <span aria-hidden="true" className="text-muted-foreground">—</span>
+            <span aria-hidden="true" className="font-mono text-muted-foreground">—</span>
             <Field data-invalid={delayError ? true : undefined}>
               <FieldLabel htmlFor={ids.delayMax} className="sr-only">Максимум</FieldLabel>
               <Input

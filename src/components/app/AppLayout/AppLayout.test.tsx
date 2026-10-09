@@ -263,7 +263,7 @@ describe("work pause", () => {
     );
     expect(await within(dialog).findByRole("button", { name: "Назначить" })).toBeInTheDocument();
     expect(within(dialog).getByText(/Сейчас назначено/)).toBeInTheDocument();
-    expect(within(dialog).getByText("W", { selector: "strong" })).toBeInTheDocument();
+    expect(within(dialog).getByText("W")).toBeInTheDocument();
 
     backend.failOn("settings_set_pause_hotkey", "Система не может занять это сочетание");
     await user.click(within(dialog).getByRole("button", { name: "Назначить" }));
