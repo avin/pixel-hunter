@@ -3,7 +3,10 @@ import { tauriBaseQuery } from "./tauriBaseQuery";
 import type {
   Action,
   ActionSoundInfo,
+  AppSettings,
   KeyCodeInfo,
+  KeyCombo,
+  LastScreen,
   Pixel,
   PixelInput,
   Profile,
@@ -13,6 +16,7 @@ import type {
   Tracker,
   TrackerInput,
   WindowedProcess,
+  WorkPause,
 } from "./types";
 
 interface PixelArgs {
@@ -26,7 +30,7 @@ const PROFILE_LIST = { type: "Profile", id: "LIST" } as const;
 export const tauriApi = createApi({
   reducerPath: "tauriApi",
   baseQuery: tauriBaseQuery,
-  tagTypes: ["Profile"],
+  tagTypes: ["Profile", "Settings"],
   endpoints: (builder) => ({
     listProfiles: builder.query<Profile[], void>({
       query: () => ({ command: "profiles_list" }),
@@ -106,14 +110,83 @@ export const tauriApi = createApi({
         { type: "Profile", id: profileId },
       ],
     }),
-    engineActivate: builder.mutation<void, { profileId: string }>({
-      query: ({ profileId }) => ({
+    engineActivate: builder.mutation<void, { profileId: string; epoch: number }>({
+      query: ({ profileId, epoch }) => ({
         command: "engine_activate",
-        args: { profileId },
+        args: { profileId, epoch },
       }),
     }),
-    engineDeactivate: builder.mutation<void, void>({
-      query: () => ({ command: "engine_deactivate" }),
+    engineDeactivate: builder.mutation<void, { epoch: number }>({
+      query: ({ epoch }) => ({
+        command: "engine_deactivate",
+        args: { epoch },
+      }),
+    }),
+    getSettings: builder.query<AppSettings, void>({
+      query: () => ({ command: "settings_get" }),
+      providesTags: ["Settings"],
+    }),
+    setLastScreen: builder.mutation<LastScreen, LastScreen>({
+      query: (lastScreen) => ({
+        command: "settings_set_last_screen",
+        args: { lastScreen },
+      }),
+      async onQueryStarted(lastScreen, { dispatch, queryFulfilled }) {
+        try {
+          await queryFulfilled;
+          dispatch(
+            tauriApi.util.updateQueryData("getSettings", undefined, (draft) => {
+              draft.lastScreen = lastScreen;
+            }),
+          );
+        } catch {
+          // The footer keeps showing the last settings that were read.
+        }
+      },
+    }),
+    setPauseHotkey: builder.mutation<KeyCombo, KeyCombo>({
+      query: (pauseHotkey) => ({
+        command: "settings_set_pause_hotkey",
+        args: { pauseHotkey },
+      }),
+      invalidatesTags: ["Settings"],
+      async onQueryStarted(_pauseHotkey, { dispatch, queryFulfilled }) {
+        try {
+          const { data } = await queryFulfilled;
+          dispatch(
+            tauriApi.util.updateQueryData("getSettings", undefined, (draft) => {
+              draft.pauseHotkey = data;
+            }),
+          );
+        } catch {
+          // A failed assignment leaves the saved combo in place.
+        }
+      },
+    }),
+    clearPauseHotkey: builder.mutation<void, void>({
+      query: () => ({ command: "settings_clear_pause_hotkey" }),
+      invalidatesTags: ["Settings"],
+      async onQueryStarted(_arg, { dispatch, queryFulfilled }) {
+        try {
+          await queryFulfilled;
+          dispatch(
+            tauriApi.util.updateQueryData("getSettings", undefined, (draft) => {
+              draft.pauseHotkey = null;
+            }),
+          );
+        } catch {
+          // A failed clear leaves the saved combo in place.
+        }
+      },
+    }),
+    beginPauseHotkey: builder.mutation<void, void>({
+      query: () => ({ command: "pause_hotkey_begin" }),
+    }),
+    cancelPauseHotkey: builder.mutation<void, void>({
+      query: () => ({ command: "pause_hotkey_cancel" }),
+    }),
+    workPauseToggle: builder.mutation<WorkPause, void>({
+      query: () => ({ command: "work_pause_toggle" }),
     }),
     actionUpdate: builder.mutation<
       Action,
@@ -234,6 +307,13 @@ export const {
   useTrackerSetRunningMutation,
   useEngineActivateMutation,
   useEngineDeactivateMutation,
+  useGetSettingsQuery,
+  useSetLastScreenMutation,
+  useSetPauseHotkeyMutation,
+  useClearPauseHotkeyMutation,
+  useBeginPauseHotkeyMutation,
+  useCancelPauseHotkeyMutation,
+  useWorkPauseToggleMutation,
   useActionUpdateMutation,
   useKeyCodesListQuery,
   useActionSoundsListQuery,

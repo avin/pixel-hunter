@@ -4,6 +4,7 @@ import { engineSlice } from "./engineSlice";
 import { errorToastMiddleware } from "./errorToastMiddleware";
 import { pixelCaptureSlice } from "./pixelCaptureSlice";
 import { actionEditsSlice } from "./actionEditsSlice";
+import { workSlice } from "./workSlice";
 
 export function createAppStore() {
   return configureStore({
@@ -12,6 +13,7 @@ export function createAppStore() {
       [pixelCaptureSlice.name]: pixelCaptureSlice.reducer,
       [engineSlice.name]: engineSlice.reducer,
       [actionEditsSlice.name]: actionEditsSlice.reducer,
+      [workSlice.name]: workSlice.reducer,
     },
     middleware: (getDefaultMiddleware) =>
       getDefaultMiddleware().concat(tauriApi.middleware, errorToastMiddleware),

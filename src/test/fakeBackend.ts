@@ -2,8 +2,11 @@ import { mockIPC } from "@tauri-apps/api/mocks";
 import type {
   Action,
   ActionSoundInfo,
+  AppSettings,
   KeyCodeInfo,
+  KeyCombo,
   KeyStep,
+  LastScreen,
   Pixel,
   PixelInput,
   Profile,
@@ -19,7 +22,13 @@ interface Options {
   profiles?: Profile[];
   processes?: WindowedProcess[];
   viewerRequest?: ScreenshotViewRequest;
+  settings?: AppSettings;
 }
+
+const DEFAULT_SETTINGS: AppSettings = {
+  pauseHotkey: null,
+  lastScreen: { kind: "profiles" },
+};
 
 type Args = Record<string, unknown>;
 
@@ -57,10 +66,17 @@ export const KEY_CODES: KeyCodeInfo[] = [
 ];
 
 /** In-memory stand-in for the Rust commands, installed through `mockIPC`. */
-export function createFakeBackend({ profiles = [], processes = [], viewerRequest }: Options = {}) {
+export function createFakeBackend({
+  profiles = [],
+  processes = [],
+  viewerRequest,
+  settings = DEFAULT_SETTINGS,
+}: Options = {}) {
   const state = {
     profiles: structuredClone(profiles),
     processes: structuredClone(processes),
+    settings: structuredClone(settings),
+    paused: false,
     viewerRequest: viewerRequest ?? null as ScreenshotViewRequest | null,
     viewerVisible: false,
     pickerFrame: null as PickerFrame | null,
@@ -175,6 +191,29 @@ export function createFakeBackend({ profiles = [], processes = [], viewerRequest
         return null;
       case "engine_deactivate":
         return null;
+      case "settings_get":
+        return structuredClone(state.settings);
+      case "settings_set_last_screen": {
+        state.settings.lastScreen = args.lastScreen as LastScreen;
+        return structuredClone(state.settings.lastScreen);
+      }
+      case "settings_set_pause_hotkey": {
+        const pauseHotkey = args.pauseHotkey as KeyCombo;
+        if (!KEY_CODES.some(({ code }) => code === pauseHotkey.key)) {
+          throw new Error("Эта клавиша не поддерживается");
+        }
+        state.settings.pauseHotkey = structuredClone(pauseHotkey);
+        return structuredClone(pauseHotkey);
+      }
+      case "settings_clear_pause_hotkey":
+        state.settings.pauseHotkey = null;
+        return null;
+      case "pause_hotkey_begin":
+      case "pause_hotkey_cancel":
+        return null;
+      case "work_pause_toggle":
+        state.paused = !state.paused;
+        return { paused: state.paused };
       case "key_codes_list":
         return structuredClone(KEY_CODES);
       case "action_sounds_list":

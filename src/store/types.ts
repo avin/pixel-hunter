@@ -97,6 +97,22 @@ export interface Profile {
   trackers: Tracker[];
 }
 
+/** Screen open when the app last quit. Missing data means the profile list. */
+export type LastScreen =
+  | { kind: "profiles" }
+  | { kind: "profile"; profileId: string }
+  | { kind: "editor"; profileId: string; trackerId: string };
+
+export interface AppSettings {
+  pauseHotkey: KeyCombo | null;
+  lastScreen: LastScreen;
+}
+
+/** Payload of the `work://pause` event and the pause toggle command. */
+export interface WorkPause {
+  paused: boolean;
+}
+
 export interface WindowedProcess {
   exeName: string;
   windowTitles: string[];

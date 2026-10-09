@@ -662,9 +662,7 @@ mod tests {
             ]
         );
         let statuses = env.statuses();
-        assert!(statuses.contains(&CaptureStatus::Countdown {
-            remaining_ms: 200
-        }));
+        assert!(statuses.contains(&CaptureStatus::Countdown { remaining_ms: 200 }));
         assert_eq!(
             statuses[statuses.len() - 2..],
             [CaptureStatus::Picking, CaptureStatus::Done]

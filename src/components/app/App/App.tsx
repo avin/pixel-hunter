@@ -2,6 +2,7 @@ import { Provider } from "react-redux";
 import { AppRouter } from "@/components/app/AppRouter/AppRouter";
 import { Toaster } from "@/components/ui/sonner";
 import { useEngineEvents } from "@/hooks/useEngineEvents";
+import { useWorkEvents } from "@/hooks/useWorkEvents";
 import { usePixelCaptureEvents } from "@/hooks/usePixelCaptureEvents";
 import { useScreenshotViewErrors } from "@/hooks/useScreenshotViewErrors";
 import type { AppStore } from "@/store";
@@ -25,5 +26,6 @@ function BackendEvents() {
   usePixelCaptureEvents();
   useScreenshotViewErrors();
   useEngineEvents();
+  useWorkEvents();
   return null;
 }

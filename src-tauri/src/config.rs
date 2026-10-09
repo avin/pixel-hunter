@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::action::Action;
+use crate::action::{Action, KeyCombo};
 use crate::error::{AppError, AppResult};
 
 pub const CONFIG_VERSION: u32 = 1;
@@ -13,6 +13,8 @@ pub const DEFAULT_TOLERANCE_PERCENT: u8 = 10;
 pub struct Config {
     pub version: u32,
     pub profiles: Vec<Profile>,
+    #[serde(default)]
+    pub settings: Settings,
 }
 
 impl Default for Config {
@@ -20,7 +22,47 @@ impl Default for Config {
         Self {
             version: CONFIG_VERSION,
             profiles: Vec::new(),
+            settings: Settings::default(),
         }
+    }
+}
+
+/// Session preferences stored next to profiles. Pause itself is not here.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct Settings {
+    pub pause_hotkey: Option<KeyCombo>,
+    pub last_screen: LastScreen,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            pause_hotkey: None,
+            last_screen: LastScreen::Profiles,
+        }
+    }
+}
+
+/// Screen open when the app last quit. Missing data means the profile list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum LastScreen {
+    Profiles,
+    #[serde(rename_all = "camelCase")]
+    Profile {
+        profile_id: Uuid,
+    },
+    #[serde(rename_all = "camelCase")]
+    Editor {
+        profile_id: Uuid,
+        tracker_id: Uuid,
+    },
+}
+
+impl Default for LastScreen {
+    fn default() -> Self {
+        Self::Profiles
     }
 }
 
@@ -257,9 +299,80 @@ mod tests {
                         "isRunning": false,
                     }],
                 }],
+                "settings": {
+                    "pauseHotkey": null,
+                    "lastScreen": { "kind": "profiles" },
+                },
             })
         );
         assert_eq!(serde_json::from_value::<Config>(value).unwrap(), config);
+    }
+
+    #[test]
+    fn old_config_without_settings_opens_as_the_profile_list_without_a_hotkey() {
+        let mut profile = Profile::new("Diablo".into(), "game.exe".into());
+        let mut tracker = Tracker::new("Здоровье".into());
+        tracker.is_running = true;
+        profile.trackers.push(tracker);
+        let saved = json!({
+            "version": 1,
+            "profiles": [profile],
+        });
+
+        let config: Config = serde_json::from_value(saved).unwrap();
+
+        assert_eq!(config.settings.pause_hotkey, None);
+        assert_eq!(config.settings.last_screen, LastScreen::Profiles);
+        assert!(config.profiles[0].trackers[0].is_running);
+    }
+
+    #[test]
+    fn last_screen_uses_camel_case_fields() {
+        let profile_id = Uuid::new_v4();
+        let tracker_id = Uuid::new_v4();
+        let screen = LastScreen::Editor {
+            profile_id,
+            tracker_id,
+        };
+
+        let value = serde_json::to_value(&screen).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "kind": "editor",
+                "profileId": profile_id,
+                "trackerId": tracker_id,
+            })
+        );
+        assert_eq!(serde_json::from_value::<LastScreen>(value).unwrap(), screen);
+    }
+
+    #[test]
+    fn round_trip_keeps_the_hotkey_the_screen_and_run_flags() {
+        let mut profile = Profile::new("Diablo".into(), "game.exe".into());
+        let mut tracker = Tracker::new("Здоровье".into());
+        tracker.is_running = true;
+        profile.trackers.push(tracker);
+        let config = Config {
+            profiles: vec![profile],
+            settings: Settings {
+                pause_hotkey: Some(KeyCombo {
+                    modifiers: vec![crate::action::Modifier::Ctrl],
+                    key: "KeyQ".into(),
+                }),
+                last_screen: LastScreen::Editor {
+                    profile_id: Uuid::new_v4(),
+                    tracker_id: Uuid::new_v4(),
+                },
+            },
+            ..Config::default()
+        };
+
+        let restored: Config =
+            serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+
+        assert_eq!(restored, config);
+        assert!(restored.profiles[0].trackers[0].is_running);
     }
 
     #[test]

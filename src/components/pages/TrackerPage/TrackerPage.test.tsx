@@ -391,7 +391,7 @@ describe("TrackerPage", () => {
     await screen.findByText("Диск недоступен", { selector: "p" });
     expect(nameInput()).toHaveValue("Здоровье новый");
     expect(router.state.location.pathname).toBe("/profiles/profile-1/trackers/tracker-1");
-    expect(backend.callsOf("engine_activate")).toEqual([{ profileId: "profile-1" }]);
+    expect(backend.callsOf("engine_activate")).toEqual([{ profileId: "profile-1", epoch: 1 }]);
     backend.failOn("tracker_update", undefined);
     await act(async () => { await router.navigate("/profiles/other"); });
     await screen.findByRole("heading", { name: "Другой" });

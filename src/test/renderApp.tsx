@@ -14,3 +14,12 @@ export function renderApp(backend: FakeBackend = createFakeBackend(), initialEnt
   render(<App store={createAppStore()} router={router} />);
   return { user, backend, router };
 }
+
+/** Starts the app the way production does: the router appears only after settings and profiles load. */
+export function renderRestoredApp(backend: FakeBackend = createFakeBackend()) {
+  backend.install();
+  mockConvertFileSrc("windows");
+  const user = userEvent.setup();
+  render(<App store={createAppStore()} />);
+  return { user, backend };
+}

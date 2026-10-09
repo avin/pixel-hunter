@@ -618,7 +618,44 @@ mod tests {
         assert_eq!(h.reads.len(), 1);
 
         h.paused = false;
-        assert_eq!(h.tick(ms(550)).len(), 1);
+        let jobs = h.tick(ms(550));
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(
+            h.reads.len(),
+            1,
+            "the elapsed delay does not read pixels again"
+        );
+    }
+
+    #[test]
+    fn stopping_during_pause_drops_a_waiting_delay() {
+        let health = tracker(&[(1, 1)], (100, 100), 0);
+        let mut h = Harness::new(&[health.clone()]);
+        h.paint((1, 1), RED);
+        h.tick(ms(0));
+
+        h.paused = true;
+        let mut stopped = health;
+        stopped.is_running = false;
+        assert!(h.core.set_trackers(&[stopped]).is_empty());
+        h.paused = false;
+
+        assert!(h.run(550, 750).is_empty());
+    }
+
+    #[test]
+    fn stopping_during_pause_cancels_a_queued_job() {
+        let health = tracker(&[(1, 1)], (0, 0), 0);
+        let mut h = Harness::new(&[health.clone()]);
+        h.paint((1, 1), RED);
+        let jobs = h.tick(ms(0));
+
+        h.paused = true;
+        let mut stopped = health;
+        stopped.is_running = false;
+        let cancelled = h.core.set_trackers(&[stopped]);
+
+        assert_eq!(cancelled, [jobs[0].ticket]);
     }
 
     #[test]

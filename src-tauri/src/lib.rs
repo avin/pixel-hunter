@@ -6,6 +6,7 @@ mod config_store;
 mod engine;
 mod error;
 mod foreground;
+mod hotkey;
 mod key_codes;
 mod key_sequence;
 mod keyboard;
@@ -16,6 +17,7 @@ mod screen;
 mod screen_overlay;
 mod screenshot_viewer;
 mod screenshots;
+mod settings;
 mod shutter;
 
 use std::path::Path;
@@ -31,6 +33,18 @@ use screenshots::Screenshots;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if app
+                        .state::<hotkey::PauseHotkeys>()
+                        .on_shortcut(shortcut, event.state)
+                    {
+                        commands::toggle_work_pause(app);
+                    }
+                })
+                .build(),
+        )
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_filter(|label| label == "main")
@@ -53,6 +67,13 @@ pub fn run() {
             app.manage(Engine::start_with_audio(audio, move |status| {
                 let _ = emitter.emit(engine::STATUS_EVENT, status);
             }));
+            let saved_hotkey = loaded
+                .store
+                .read(|config| config.settings.pause_hotkey.clone());
+            app.manage(hotkey::PauseHotkeys::install(
+                saved_hotkey,
+                app.handle().clone(),
+            ));
             let handle = app.handle().clone();
             loaded
                 .store
@@ -77,6 +98,13 @@ pub fn run() {
             commands::tracker_set_running,
             commands::engine_activate,
             commands::engine_deactivate,
+            commands::settings_get,
+            commands::settings_set_last_screen,
+            commands::settings_set_pause_hotkey,
+            commands::settings_clear_pause_hotkey,
+            commands::pause_hotkey_begin,
+            commands::pause_hotkey_cancel,
+            commands::work_pause_toggle,
             commands::action_update,
             commands::key_codes_list,
             commands::action_sounds_list,

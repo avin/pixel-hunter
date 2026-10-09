@@ -249,17 +249,13 @@ describe("ProfilePage", () => {
         profileFixture({ processName: "game.exe", trackers: [running] }),
       );
 
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Ожидание окна игры game.exe",
-      );
+      expect(screen.getByText("Ожидание окна игры game.exe")).toBeInTheDocument();
 
       await emitStatus(true);
-      expect(screen.getByRole("status")).toHaveTextContent("Окно игры активно");
+      expect(screen.getByText("Окно игры активно")).toBeInTheDocument();
 
       await emitStatus(false);
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Ожидание окна игры game.exe",
-      );
+      expect(screen.getByText("Ожидание окна игры game.exe")).toBeInTheDocument();
     });
 
     it("shows window activity separately from the saved run count", async () => {
@@ -269,7 +265,7 @@ describe("ProfilePage", () => {
 
       await emitStatus(true);
 
-      expect(screen.getByRole("status")).toHaveTextContent("Окно игры активно");
+      expect(screen.getByText("Окно игры активно")).toBeInTheDocument();
       expect(screen.getByText("Запущено: 0/1")).toBeInTheDocument();
     });
   });

@@ -23,6 +23,53 @@ use executor::CancelledJobs;
 use poller::{Command, Poller};
 
 pub const STATUS_EVENT: &str = "engine://status";
+pub const PAUSE_EVENT: &str = "work://pause";
+
+/// Payload of [`PAUSE_EVENT`] and the toggle command.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkPause {
+    pub paused: bool,
+}
+
+/// Capture pause and the user's pause, published as one signal for the poller and executor.
+struct PauseControl {
+    capture: AtomicBool,
+    user: AtomicBool,
+    /// Serializes updates so one pause cannot publish over the other's newer value.
+    lock: Mutex<()>,
+    signal: Arc<AtomicBool>,
+}
+
+impl PauseControl {
+    fn new() -> Self {
+        Self {
+            capture: AtomicBool::new(false),
+            user: AtomicBool::new(false),
+            lock: Mutex::new(()),
+            signal: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    fn publish(&self) {
+        let paused = self.capture.load(Ordering::SeqCst) || self.user.load(Ordering::SeqCst);
+        self.signal.store(paused, Ordering::SeqCst);
+    }
+
+    fn set_capture(&self, paused: bool) {
+        let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
+        self.capture.store(paused, Ordering::SeqCst);
+        self.publish();
+    }
+
+    /// Flips the user pause and returns the new value.
+    fn toggle_user(&self) -> bool {
+        let _guard = self.lock.lock().unwrap_or_else(PoisonError::into_inner);
+        let previous = self.user.fetch_xor(true, Ordering::SeqCst);
+        self.publish();
+        !previous
+    }
+}
 
 /// Sent when the game window of the active profile gains or loses the foreground.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -32,10 +79,16 @@ pub struct EngineStatus {
     pub game_active: bool,
 }
 
+struct Activation {
+    profile_id: Option<Uuid>,
+    /// Identifies the frontend request that started the current activation.
+    epoch: u64,
+}
+
 pub struct Engine {
     commands: Sender<Command>,
-    active_profile: Mutex<Option<Uuid>>,
-    paused: Arc<AtomicBool>,
+    activation: Mutex<Activation>,
+    pause: Arc<PauseControl>,
 }
 
 impl Engine {
@@ -52,10 +105,10 @@ impl Engine {
         let (commands, command_receiver) = mpsc::channel();
         let (jobs, job_receiver) = mpsc::channel();
         let cancelled = Arc::new(CancelledJobs::default());
-        let paused = Arc::new(AtomicBool::new(false));
+        let pause = Arc::new(PauseControl::new());
 
         let done = commands.clone();
-        let (executor_cancelled, executor_paused) = (cancelled.clone(), paused.clone());
+        let (executor_cancelled, executor_paused) = (cancelled.clone(), pause.signal.clone());
         thread::spawn(move || {
             executor::run(
                 job_receiver,
@@ -79,20 +132,24 @@ impl Engine {
             commands: command_receiver,
             jobs,
             cancelled,
-            paused: paused.clone(),
+            paused: pause.signal.clone(),
             emit,
         };
         thread::spawn(move || poller.run());
 
         Self {
             commands,
-            active_profile: Mutex::new(None),
-            paused,
+            activation: Mutex::new(Activation {
+                profile_id: None,
+                epoch: 0,
+            }),
+            pause,
         }
     }
 
     /// Makes the profile the only one that runs, replacing a previously active one.
-    pub fn activate(&self, store: &ConfigStore, profile_id: Uuid) -> AppResult<()> {
+    /// `epoch` lets a newer request ignore a stop that was issued for an older one.
+    pub fn activate(&self, store: &ConfigStore, profile_id: Uuid, epoch: u64) -> AppResult<()> {
         // Reading under the store lock orders this with `config_changed` notifications.
         store.read(|config| {
             let profile = config
@@ -100,27 +157,32 @@ impl Engine {
                 .iter()
                 .find(|profile| profile.id == profile_id)
                 .ok_or(AppError::NotFound("Профиль не найден"))?;
-            let mut active = self.active();
-            if active.is_some() {
-                self.send(Command::Deactivate);
-            }
-            *active = Some(profile_id);
+            let mut activation = self.activation();
+            activation.epoch = epoch;
+            activation.profile_id = Some(profile_id);
+            drop(activation);
             self.send(Command::Activate(profile.clone()));
             Ok(())
         })
     }
 
-    /// Stops every tracker of the active profile without touching their saved run state.
-    pub fn deactivate(&self) {
-        if self.active().take().is_some() {
+    /// Stops the profile started by `epoch`. A stop for an older request does nothing.
+    pub fn deactivate(&self, epoch: u64) {
+        let mut activation = self.activation();
+        if activation.epoch != epoch {
+            return;
+        }
+        activation.epoch = 0;
+        if activation.profile_id.take().is_some() {
+            drop(activation);
             self.send(Command::Deactivate);
         }
     }
 
     /// Called by `ConfigStore` after each committed mutation.
     pub fn config_changed(&self, config: &Config) {
-        let mut active = self.active();
-        let Some(profile_id) = *active else {
+        let mut activation = self.activation();
+        let Some(profile_id) = activation.profile_id else {
             return;
         };
         match config
@@ -128,26 +190,41 @@ impl Engine {
             .iter()
             .find(|profile| profile.id == profile_id)
         {
-            Some(profile) => self.send(Command::Update(profile.clone())),
+            Some(profile) => {
+                drop(activation);
+                self.send(Command::Update(profile.clone()));
+            }
             None => {
-                *active = None;
+                activation.epoch = 0;
+                activation.profile_id = None;
+                drop(activation);
                 self.send(Command::Deactivate);
             }
         }
     }
 
-    /// Suspends polling and action playback until the guard is dropped.
+    /// Suspends polling and new actions until the guard is dropped. Does not clear a user pause.
     pub fn pause(&self) -> PauseGuard {
-        self.paused.store(true, Ordering::SeqCst);
-        PauseGuard(self.paused.clone())
+        self.pause.set_capture(true);
+        PauseGuard(self.pause.clone())
+    }
+
+    /// Session pause. Not written to the config and independent of capture pause.
+    pub fn toggle_user_pause(&self) -> bool {
+        self.pause.toggle_user()
+    }
+
+    #[cfg(test)]
+    fn is_user_paused(&self) -> bool {
+        self.pause.user.load(Ordering::SeqCst)
     }
 
     fn send(&self, command: Command) {
         let _ = self.commands.send(command);
     }
 
-    fn active(&self) -> MutexGuard<'_, Option<Uuid>> {
-        self.active_profile
+    fn activation(&self) -> MutexGuard<'_, Activation> {
+        self.activation
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
     }
@@ -168,11 +245,11 @@ fn play_action(
     }
 }
 
-pub struct PauseGuard(Arc<AtomicBool>);
+pub struct PauseGuard(Arc<PauseControl>);
 
 impl Drop for PauseGuard {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        self.0.set_capture(false);
     }
 }
 
@@ -187,8 +264,11 @@ mod tests {
         let (commands, receiver) = mpsc::channel();
         let engine = Engine {
             commands,
-            active_profile: Mutex::new(None),
-            paused: Arc::new(AtomicBool::new(false)),
+            activation: Mutex::new(Activation {
+                profile_id: None,
+                epoch: 0,
+            }),
+            pause: Arc::new(PauseControl::new()),
         };
         (engine, receiver)
     }
@@ -235,7 +315,7 @@ mod tests {
         let (_dir, store, ids) = store_with(&["Diablo"]);
         let (engine, receiver) = engine();
 
-        engine.activate(&store, ids[0]).unwrap();
+        engine.activate(&store, ids[0], 1).unwrap();
 
         assert_eq!(sent(&receiver), [Sent::Activate(ids[0])]);
     }
@@ -245,7 +325,7 @@ mod tests {
         let (_dir, store, _) = store_with(&[]);
         let (engine, receiver) = engine();
 
-        let result = engine.activate(&store, Uuid::new_v4());
+        let result = engine.activate(&store, Uuid::new_v4(), 1);
 
         assert!(matches!(result, Err(AppError::NotFound(_))));
         assert!(sent(&receiver).is_empty());
@@ -256,16 +336,27 @@ mod tests {
         let (_dir, store, ids) = store_with(&["Diablo", "Path of Exile"]);
         let (engine, receiver) = engine();
 
-        engine.activate(&store, ids[0]).unwrap();
-        engine.activate(&store, ids[1]).unwrap();
+        engine.activate(&store, ids[0], 1).unwrap();
+        engine.activate(&store, ids[1], 2).unwrap();
 
         assert_eq!(
             sent(&receiver),
-            [
-                Sent::Activate(ids[0]),
-                Sent::Deactivate,
-                Sent::Activate(ids[1])
-            ]
+            [Sent::Activate(ids[0]), Sent::Activate(ids[1])]
+        );
+    }
+
+    #[test]
+    fn a_stale_stop_does_not_cancel_the_newer_activation() {
+        let (_dir, store, ids) = store_with(&["Diablo"]);
+        let (engine, receiver) = engine();
+
+        engine.activate(&store, ids[0], 1).unwrap();
+        engine.activate(&store, ids[0], 2).unwrap();
+        engine.deactivate(1);
+
+        assert_eq!(
+            sent(&receiver),
+            [Sent::Activate(ids[0]), Sent::Activate(ids[0])]
         );
     }
 
@@ -273,10 +364,10 @@ mod tests {
     fn deactivates_once() {
         let (_dir, store, ids) = store_with(&["Diablo"]);
         let (engine, receiver) = engine();
-        engine.activate(&store, ids[0]).unwrap();
+        engine.activate(&store, ids[0], 1).unwrap();
 
-        engine.deactivate();
-        engine.deactivate();
+        engine.deactivate(1);
+        engine.deactivate(1);
 
         assert_eq!(sent(&receiver), [Sent::Activate(ids[0]), Sent::Deactivate]);
     }
@@ -285,7 +376,7 @@ mod tests {
     fn forwards_changes_of_the_active_profile_only() {
         let (_dir, store, ids) = store_with(&["Diablo", "Path of Exile"]);
         let (engine, receiver) = engine();
-        engine.activate(&store, ids[0]).unwrap();
+        engine.activate(&store, ids[0], 1).unwrap();
         sent(&receiver);
 
         let config = store.read(Clone::clone);
@@ -308,13 +399,13 @@ mod tests {
     fn deleting_the_active_profile_deactivates_the_engine() {
         let (_dir, store, ids) = store_with(&["Diablo", "Path of Exile"]);
         let (engine, receiver) = engine();
-        engine.activate(&store, ids[0]).unwrap();
+        engine.activate(&store, ids[0], 1).unwrap();
         sent(&receiver);
 
         let mut config = store.read(Clone::clone);
         config.profiles.retain(|profile| profile.id != ids[0]);
         engine.config_changed(&config);
-        engine.deactivate();
+        engine.deactivate(1);
 
         assert_eq!(sent(&receiver), [Sent::Deactivate]);
     }
@@ -327,9 +418,9 @@ mod tests {
         let (_dir, store, ids) = store_with(&["Diablo"]);
         let engine = Engine::start(|status| println!("{status:?}"));
 
-        engine.activate(&store, ids[0]).unwrap();
+        engine.activate(&store, ids[0], 1).unwrap();
         thread::sleep(std::time::Duration::from_secs(2));
-        engine.deactivate();
+        engine.deactivate(1);
     }
 
     #[test]
@@ -337,9 +428,53 @@ mod tests {
         let (engine, _receiver) = engine();
 
         let guard = engine.pause();
-        assert!(engine.paused.load(Ordering::SeqCst));
+        assert!(engine.pause.signal.load(Ordering::SeqCst));
 
         drop(guard);
-        assert!(!engine.paused.load(Ordering::SeqCst));
+        assert!(!engine.pause.signal.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn dropping_capture_pause_does_not_clear_user_pause() {
+        let (engine, _receiver) = engine();
+        assert!(engine.toggle_user_pause());
+
+        let guard = engine.pause();
+        assert!(engine.pause.signal.load(Ordering::SeqCst));
+        drop(guard);
+
+        assert!(engine.is_user_paused());
+        assert!(engine.pause.signal.load(Ordering::SeqCst));
+
+        assert!(!engine.toggle_user_pause());
+        assert!(!engine.pause.signal.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn user_pause_toggles_without_writing_run_flags_and_is_off_after_reload() {
+        let (dir, store, _ids) = store_with(&["Diablo"]);
+        store
+            .update(|config| {
+                let mut tracker = crate::config::Tracker::new("Здоровье".into());
+                tracker.is_running = true;
+                config.profiles[0].trackers.push(tracker);
+                Ok(())
+            })
+            .unwrap();
+        let before = std::fs::read(dir.path().join("config.json")).unwrap();
+        let (running, _receiver) = engine();
+
+        assert!(running.toggle_user_pause());
+        assert!(!running.toggle_user_pause());
+        assert_eq!(
+            std::fs::read(dir.path().join("config.json")).unwrap(),
+            before
+        );
+
+        let reloaded = ConfigStore::load(dir.path()).unwrap().store;
+        assert!(reloaded.read(|config| config.profiles[0].trackers[0].is_running));
+        let (fresh, _receiver) = engine();
+        assert!(!fresh.is_user_paused());
+        assert!(!fresh.pause.signal.load(Ordering::SeqCst));
     }
 }

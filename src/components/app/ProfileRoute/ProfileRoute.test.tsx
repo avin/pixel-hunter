@@ -25,7 +25,7 @@ describe("ProfileRoute", () => {
     const { backend } = await openProfile();
 
     await waitFor(() =>
-      expect(backend.callsOf("engine_activate")).toEqual([{ profileId: "diablo" }]),
+      expect(backend.callsOf("engine_activate")).toEqual([{ profileId: "diablo", epoch: 1 }]),
     );
     expect(backend.callsOf("engine_deactivate")).toEqual([]);
   });

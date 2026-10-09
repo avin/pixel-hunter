@@ -1,20 +1,23 @@
 import { ArrowLeft } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, matchPath, Outlet, useLocation } from "react-router-dom";
+import { screenFromPath } from "@/components/app/AppRouter/initialScreen";
 import {
   PROFILE_ROUTE,
   profilePath,
   TRACKER_ROUTE,
 } from "@/components/app/AppRouter/paths";
 import { buttonVariants } from "@/components/ui/button";
-import { useListProfilesQuery } from "@/store/api";
+import { useListProfilesQuery, useSetLastScreenMutation } from "@/store/api";
 import { GameWindowStatus } from "@/components/pages/ProfilePage/GameWindowStatus/GameWindowStatus";
+import { WorkControls } from "./WorkControls/WorkControls";
 import { WorkspaceSidebar } from "./WorkspaceSidebar/WorkspaceSidebar";
 import { WorkspaceNavigationContext } from "./workspaceNavigation";
 
 export function AppLayout() {
   const { title, backTo, profile, trackerId } = useHeader();
   const [isLeaving, setIsLeaving] = useState(false);
+  useRememberScreen();
 
   return (
     <WorkspaceNavigationContext value={{ isLeaving, setIsLeaving }}>
@@ -46,6 +49,7 @@ export function AppLayout() {
             <Outlet />
           </main>
           <footer className="flex min-h-8 shrink-0 items-center gap-3 border-t px-3 text-xs">
+            <WorkControls />
             {profile ? (
               <>
                 <span className="shrink-0 text-muted-foreground">
@@ -105,4 +109,19 @@ function useHeader() {
     profile: undefined,
     trackerId: undefined,
   };
+}
+
+/** Writes the open screen after the restored route, never on the first frame. */
+function useRememberScreen() {
+  const { pathname } = useLocation();
+  const [setLastScreen] = useSetLastScreenMutation();
+  const isFirst = useRef(true);
+
+  useEffect(() => {
+    if (isFirst.current) {
+      isFirst.current = false;
+      return;
+    }
+    void setLastScreen(screenFromPath(pathname));
+  }, [pathname, setLastScreen]);
 }

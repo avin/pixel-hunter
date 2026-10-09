@@ -1,18 +1,28 @@
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use uuid::Uuid;
 
-use crate::action::Action;
+use crate::action::{Action, KeyCombo};
 use crate::action_sound::{self, AudioService, SoundInfo};
-use crate::config::{Pixel, Profile, Tracker};
+use crate::config::{LastScreen, Pixel, Profile, Settings, Tracker};
 use crate::config_store::ConfigStore;
-use crate::engine::Engine;
+use crate::engine::{Engine, WorkPause};
 use crate::error::AppResult;
+use crate::hotkey::PauseHotkeys;
 use crate::key_codes::{self, KeyCodeInfo};
 use crate::pixel_capture::{self, CaptureCommand, CaptureRequest, PixelCapture};
 use crate::processes::{self, WindowedProcess};
 use crate::profiles::{self, PixelInput, ProfileInput, TrackerInput};
 use crate::screen_overlay::{self, TauriCaptureEnv};
 use crate::screenshots::Screenshots;
+use crate::settings;
+
+/// Toggles the session pause and tells every listener. Shared by the button and the hotkey.
+pub fn toggle_work_pause(app: &AppHandle) -> WorkPause {
+    let paused = app.state::<Engine>().toggle_user_pause();
+    let state = WorkPause { paused };
+    let _ = app.emit(crate::engine::PAUSE_EVENT, &state);
+    state
+}
 
 #[tauri::command]
 pub fn profiles_list(store: State<'_, ConfigStore>) -> Vec<Profile> {
@@ -86,13 +96,59 @@ pub fn engine_activate(
     store: State<'_, ConfigStore>,
     engine: State<'_, Engine>,
     profile_id: Uuid,
+    epoch: u64,
 ) -> AppResult<()> {
-    engine.activate(&store, profile_id)
+    engine.activate(&store, profile_id, epoch)
 }
 
 #[tauri::command]
-pub fn engine_deactivate(engine: State<'_, Engine>) {
-    engine.deactivate();
+pub fn engine_deactivate(engine: State<'_, Engine>, epoch: u64) {
+    engine.deactivate(epoch);
+}
+
+#[tauri::command]
+pub fn settings_get(store: State<'_, ConfigStore>) -> Settings {
+    settings::settings(&store)
+}
+
+#[tauri::command]
+pub fn settings_set_last_screen(
+    store: State<'_, ConfigStore>,
+    last_screen: LastScreen,
+) -> AppResult<LastScreen> {
+    settings::set_last_screen(&store, last_screen)
+}
+
+#[tauri::command]
+pub fn settings_set_pause_hotkey(
+    store: State<'_, ConfigStore>,
+    hotkeys: State<'_, PauseHotkeys>,
+    pause_hotkey: KeyCombo,
+) -> AppResult<KeyCombo> {
+    hotkeys.lock().assign(&store, pause_hotkey)
+}
+
+#[tauri::command]
+pub fn settings_clear_pause_hotkey(
+    store: State<'_, ConfigStore>,
+    hotkeys: State<'_, PauseHotkeys>,
+) -> AppResult<()> {
+    hotkeys.lock().clear(&store)
+}
+
+#[tauri::command]
+pub fn pause_hotkey_begin(hotkeys: State<'_, PauseHotkeys>) {
+    hotkeys.lock().begin_assign();
+}
+
+#[tauri::command]
+pub fn pause_hotkey_cancel(hotkeys: State<'_, PauseHotkeys>) {
+    hotkeys.lock().cancel_assign();
+}
+
+#[tauri::command]
+pub fn work_pause_toggle(app: AppHandle) -> WorkPause {
+    toggle_work_pause(&app)
 }
 
 #[tauri::command]

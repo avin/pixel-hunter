@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { KeyCombo, Modifier } from "@/store/types";
 
@@ -7,6 +7,9 @@ interface Props
   supportedCodes: ReadonlySet<string>;
   onRecord: (combo: KeyCombo) => void;
   onUnsupported: () => void;
+  onPrepareRecording?: () => Promise<void>;
+  onRecordingChange?: (isRecording: boolean) => void;
+  recordingLabel?: string;
 }
 
 const MODIFIER_CODES: Partial<Record<string, Modifier>> = {
@@ -35,10 +38,64 @@ export function KeyRecorder({
   supportedCodes,
   onRecord,
   onUnsupported,
+  onPrepareRecording,
+  onRecordingChange,
+  recordingLabel = "Нажмите клавишу…",
   children,
   ...rest
 }: Props) {
   const [isRecording, setIsRecording] = useState(false);
+  const [isPreparing, setIsPreparing] = useState(false);
+  const preparation = useRef<{ cancelled: boolean } | null>(null);
+  const isMounted = useRef(true);
+  const skipInitial = useRef(true);
+  const notifyRecording = useEffectEvent((recording: boolean) => {
+    onRecordingChange?.(recording);
+  });
+
+  useEffect(() => {
+    isMounted.current = true;
+    return () => {
+      isMounted.current = false;
+      if (preparation.current) preparation.current.cancelled = true;
+    };
+  }, []);
+
+  function stopRecording() {
+    if (preparation.current) preparation.current.cancelled = true;
+    setIsRecording(false);
+  }
+
+  async function startRecording() {
+    if (!onPrepareRecording) {
+      setIsRecording(true);
+      return;
+    }
+    const request = { cancelled: false };
+    preparation.current = request;
+    setIsPreparing(true);
+    try {
+      await onPrepareRecording();
+      if (request.cancelled) {
+        onRecordingChange?.(false);
+      } else {
+        setIsRecording(true);
+      }
+    } catch {
+      // The caller reports preparation errors; recording stays off.
+    } finally {
+      preparation.current = null;
+      if (isMounted.current) setIsPreparing(false);
+    }
+  }
+
+  useEffect(() => {
+    if (skipInitial.current) {
+      skipInitial.current = false;
+      return;
+    }
+    notifyRecording(isRecording);
+  }, [isRecording]);
 
   const finish = useEffectEvent((event: KeyboardEvent, combo: KeyCombo) => {
     setIsRecording(false);
@@ -84,11 +141,15 @@ export function KeyRecorder({
   return (
     <Button
       aria-pressed={isRecording}
-      onClick={() => setIsRecording((current) => !current)}
-      onBlur={() => setIsRecording(false)}
+      aria-busy={isPreparing || undefined}
+      onClick={() => {
+        if (isRecording || isPreparing) stopRecording();
+        else void startRecording();
+      }}
+      onBlur={stopRecording}
       {...rest}
     >
-      {isRecording ? "Нажмите клавишу…" : children}
+      {isPreparing ? "Подготовка…" : isRecording ? recordingLabel : children}
     </Button>
   );
 }

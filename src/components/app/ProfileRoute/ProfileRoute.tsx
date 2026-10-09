@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Outlet, useParams } from "react-router-dom";
 import {
   useEngineActivateMutation,
@@ -10,11 +10,13 @@ export function ProfileRoute() {
   const { profileId = "" } = useParams();
   const [activate] = useEngineActivateMutation();
   const [deactivate] = useEngineDeactivateMutation();
+  const epoch = useRef(0);
 
   useEffect(() => {
-    void activate({ profileId });
+    const current = ++epoch.current;
+    void activate({ profileId, epoch: current });
     return () => {
-      void deactivate();
+      void deactivate({ epoch: current });
     };
   }, [profileId, activate, deactivate]);
 

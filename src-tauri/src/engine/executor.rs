@@ -372,4 +372,80 @@ mod tests {
         assert!(*played.borrow());
         assert_eq!(*waits.borrow(), 3);
     }
+
+    #[test]
+    fn a_started_action_finishes_during_pause_and_the_next_waits() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(job(1, keys(&["KeyQ", "KeyW"]))).unwrap();
+        sender.send(job(2, keys(&["KeyE"]))).unwrap();
+        drop(sender);
+        let paused = AtomicBool::new(false);
+        let log = Log::default();
+        let sleeper = FakeSleeper {
+            on_first_sleep: RefCell::new(Some(Box::new(|| {
+                paused.store(true, Ordering::SeqCst);
+            }))),
+        };
+        let mut rng = StdRng::seed_from_u64(0);
+        let waits = RefCell::new(0);
+        run(
+            receiver,
+            &CancelledJobs::default(),
+            &paused,
+            |action| {
+                super::super::play_action(
+                    action,
+                    |_| {},
+                    |action| {
+                        let ActionKind::KeySequence(sequence) = &action.kind;
+                        execute_key_sequence(sequence, &mut FakeInput(&log), &sleeper, &mut rng)
+                    },
+                );
+            },
+            |_| {
+                *waits.borrow_mut() += 1;
+                if *waits.borrow() == 2 {
+                    paused.store(false, Ordering::SeqCst);
+                }
+            },
+            |ticket| log.borrow_mut().push(Entry::Done(ticket)),
+        );
+
+        assert_eq!(
+            log.take(),
+            [
+                Entry::Key(Q, false),
+                Entry::Key(Q, true),
+                Entry::Key(W, false),
+                Entry::Key(W, true),
+                Entry::Done(1),
+                Entry::Key(E, false),
+                Entry::Key(E, true),
+                Entry::Done(2),
+            ]
+        );
+        assert_eq!(*waits.borrow(), 2);
+    }
+
+    #[test]
+    fn a_job_cancelled_while_paused_is_not_played() {
+        let (sender, receiver) = mpsc::channel();
+        sender.send(job(1, keys(&["KeyQ"]))).unwrap();
+        drop(sender);
+        let paused = AtomicBool::new(true);
+        let cancelled = CancelledJobs::default();
+        let played = RefCell::new(false);
+        run(
+            receiver,
+            &cancelled,
+            &paused,
+            |_| *played.borrow_mut() = true,
+            |_| {
+                cancelled.cancel([1]);
+                paused.store(false, Ordering::SeqCst);
+            },
+            |_| {},
+        );
+        assert!(!*played.borrow());
+    }
 }
