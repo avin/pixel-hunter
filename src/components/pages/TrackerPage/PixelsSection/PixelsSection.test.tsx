@@ -77,7 +77,7 @@ describe("Pixel capture on TrackerPage", () => {
     await emitStatus({ phase: "done" });
 
     expect(await screen.findByRole("combobox", { name: "Условие пикселя (812, 1040)" })).toBeInTheDocument();
-    expect(conditionSelect()).toHaveTextContent("Равно");
+    expect(conditionSelect()).toHaveTextContent("Равен цвету");
     expect(toleranceInput()).toHaveValue(10);
     expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
     expect(addButton()).toBeEnabled();
@@ -164,7 +164,7 @@ describe("Pixel table on TrackerPage", () => {
     expect(within(table).queryByRole("columnheader")).not.toBeInTheDocument();
     expect(within(table).getAllByRole("cell", { name: "Пиксель" })).toHaveLength(2);
     expect(within(table).getByRole("cell", { name: "Иконка" })).toBeInTheDocument();
-    expect(iconCondition()).toHaveTextContent("Должна быть");
+    expect(iconCondition()).toHaveTextContent("Должна присутствовать");
     expect(iconThreshold()).toHaveValue(90);
 
     const first = row("812, 1040");
@@ -178,11 +178,11 @@ describe("Pixel table on TrackerPage", () => {
       ),
     );
     expect(within(first).getByText("#C81E1E")).toBeInTheDocument();
-    expect(conditionSelect()).toHaveTextContent("Равно");
+    expect(conditionSelect()).toHaveTextContent("Равен цвету");
     expect(toleranceInput()).toHaveValue(10);
 
     expect(within(row("10, 20")).getByText("#0080FF")).toBeInTheDocument();
-    expect(conditionSelect("(10, 20)")).toHaveTextContent("Не равно");
+    expect(conditionSelect("(10, 20)")).toHaveTextContent("Не равен цвету");
     expect(toleranceInput("(10, 20)")).toHaveValue(0);
   });
 
@@ -223,7 +223,7 @@ describe("Pixel table on TrackerPage", () => {
     expect(screen.getByText("#C81E1E")).toBeInTheDocument();
 
     await user.click(conditionSelect());
-    await user.click(await screen.findByRole("option", { name: "Не равно" }));
+    await user.click(await screen.findByRole("option", { name: "Не равен цвету" }));
 
     await waitFor(() =>
       expect(backend.state.profiles[0].trackers[0].pixels[0].condition).toBe("notEquals"),
@@ -234,9 +234,9 @@ describe("Pixel table on TrackerPage", () => {
     const { user, backend } = await openTracker([pixelFixture()]);
 
     await user.click(conditionSelect());
-    await user.click(await screen.findByRole("option", { name: "Не равно" }));
+    await user.click(await screen.findByRole("option", { name: "Не равен цвету" }));
 
-    await waitFor(() => expect(conditionSelect()).toHaveTextContent("Не равно"));
+    await waitFor(() => expect(conditionSelect()).toHaveTextContent("Не равен цвету"));
     expect(backend.state.profiles[0].trackers[0].pixels[0]).toMatchObject({
       condition: "notEquals",
       tolerancePercent: 10,
@@ -344,7 +344,7 @@ describe("Icon conditions on TrackerPage", () => {
     const { user, backend } = await openTracker([], [iconFixture()]);
     expect(screen.queryByText("Пикселей и иконок пока нет")).not.toBeInTheDocument();
     expect(iconThreshold()).toHaveValue(90);
-    expect(iconCondition()).toHaveTextContent("Должна быть");
+    expect(iconCondition()).toHaveTextContent("Должна присутствовать");
     await user.pointer({ keys: "[MouseLeft]", target: screen.getByRole("button", { name: "Открыть снимок иконки (40, 50)" }), coords: { clientX: 120, clientY: 240 } });
     expect(backend.callsOf("icon_view_open")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1", iconId: "icon-1", origin: { x: 120, y: 240 } }]);
   });
@@ -358,7 +358,7 @@ describe("Icon conditions on TrackerPage", () => {
     await user.clear(minimum);
     await user.type(minimum, "125");
     await user.click(iconCondition());
-    await user.click(await screen.findByRole("option", { name: "Не должна быть" }));
+    await user.click(await screen.findByRole("option", { name: "Не должна присутствовать" }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
     expect(name).toHaveValue("Мана");
     expect(minimum).toHaveValue(125);
@@ -404,7 +404,7 @@ describe("Icon conditions on TrackerPage", () => {
     fireEvent.error(thumbnail.querySelector("img") as HTMLImageElement);
     expect(screen.getByText("Снимок недоступен")).toBeInTheDocument();
     await user.click(iconCondition());
-    await user.click(await screen.findByRole("option", { name: "Не должна быть" }));
+    await user.click(await screen.findByRole("option", { name: "Не должна присутствовать" }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
   });
 
@@ -422,7 +422,7 @@ describe("Icon conditions on TrackerPage", () => {
       expect(screen.queryByRole("button", { name: "Открыть снимок иконки (40, 50)" })).not.toBeInTheDocument();
       expect(iconThreshold()).toHaveValue(90);
       await user.click(iconCondition());
-      await user.click(await screen.findByRole("option", { name: "Не должна быть" }));
+      await user.click(await screen.findByRole("option", { name: "Не должна присутствовать" }));
       await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
       expect(backend.state.profiles[0].trackers[0].icons[0].templateRect).toEqual(iconFixture().templateRect);
       expect(probe).toHaveBeenCalledTimes(1);

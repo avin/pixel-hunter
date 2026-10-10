@@ -33,8 +33,8 @@ interface Values {
 }
 
 const CONDITION_LABELS: Record<PixelCondition, string> = {
-  equals: "Равно",
-  notEquals: "Не равно",
+  equals: "Равен цвету",
+  notEquals: "Не равен цвету",
 };
 const FIELDS = ["tolerance"] as const;
 

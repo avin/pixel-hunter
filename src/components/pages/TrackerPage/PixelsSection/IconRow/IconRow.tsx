@@ -20,7 +20,7 @@ interface Props {
 }
 
 interface Values { similarity: string }
-const LABELS: Record<IconCondition, string> = { present: "Должна быть", absent: "Не должна быть" };
+const LABELS: Record<IconCondition, string> = { present: "Должна присутствовать", absent: "Не должна присутствовать" };
 const FIELDS = ["similarity"] as const;
 function validateSimilarity(values: Readonly<Values>) {
   const value = values.similarity.trim();
