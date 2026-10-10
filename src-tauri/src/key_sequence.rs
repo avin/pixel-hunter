@@ -27,11 +27,23 @@ pub trait Sleeper {
 }
 
 /// Fails before sending anything when a step has an unsupported key, otherwise runs every step.
+#[cfg(test)]
 pub fn execute_key_sequence(
     action: &KeySequenceAction,
     input: &mut dyn InputSink,
     clock: &dyn Sleeper,
     rng: &mut impl Rng,
+) -> AppResult<()> {
+    execute_key_sequence_until(action, input, clock, rng, &|| false)
+}
+
+/// Stops on capture pause and releases every key already pressed before returning.
+pub fn execute_key_sequence_until(
+    action: &KeySequenceAction,
+    input: &mut dyn InputSink,
+    clock: &dyn Sleeper,
+    rng: &mut impl Rng,
+    interrupted: &dyn Fn() -> bool,
 ) -> AppResult<()> {
     let steps = action
         .steps
@@ -46,11 +58,18 @@ pub fn execute_key_sequence(
         .collect::<AppResult<Vec<_>>>()?;
 
     for (step, key) in steps {
+        if interrupted() {
+            break;
+        }
         if let Some(delay) = step.delay_before_ms {
             let ms = rng.random_range(delay.min..=delay.max);
-            clock.sleep(Duration::from_millis(ms.into()));
+            if !sleep_until(clock, Duration::from_millis(ms.into()), interrupted) {
+                break;
+            }
         }
-        press_combo(step, key, input, clock, rng);
+        if !press_combo(step, key, input, clock, rng, interrupted) {
+            break;
+        }
     }
     Ok(())
 }
@@ -61,7 +80,8 @@ fn press_combo(
     input: &mut dyn InputSink,
     clock: &dyn Sleeper,
     rng: &mut impl Rng,
-) {
+    interrupted: &dyn Fn() -> bool,
+) -> bool {
     let modifiers: Vec<_> = step
         .combo
         .modifiers
@@ -69,18 +89,67 @@ fn press_combo(
         .map(|modifier| key_codes::modifier_key(*modifier))
         .collect();
 
+    let mut held = Vec::new();
     for modifier in &modifiers {
+        if interrupted() {
+            release_keys(input, &held);
+            return false;
+        }
         input.send(event(modifier, false));
-        clock.sleep(bell(rng, MODIFIER_GAP_MS));
+        held.push(*modifier);
+        if !sleep_until(clock, bell(rng, MODIFIER_GAP_MS), interrupted) {
+            release_keys(input, &held);
+            return false;
+        }
+    }
+    if interrupted() {
+        release_keys(input, &held);
+        return false;
     }
     input.send(event(key, false));
+    held.push(key);
     // The step controls the main key's hold; modifier gaps keep their own timing.
-    clock.sleep(bell(rng, (step.hold_ms.min.into(), step.hold_ms.max.into())));
-    input.send(event(key, true));
-    for modifier in modifiers.iter().rev() {
-        clock.sleep(bell(rng, MODIFIER_GAP_MS));
-        input.send(event(modifier, true));
+    if !sleep_until(
+        clock,
+        bell(rng, (step.hold_ms.min.into(), step.hold_ms.max.into())),
+        interrupted,
+    ) {
+        release_keys(input, &held);
+        return false;
     }
+    input.send(event(key, true));
+    held.pop();
+    for modifier in modifiers.iter().rev() {
+        if !sleep_until(clock, bell(rng, MODIFIER_GAP_MS), interrupted) {
+            release_keys(input, &held);
+            return false;
+        }
+        input.send(event(modifier, true));
+        held.pop();
+    }
+    true
+}
+
+fn release_keys(input: &mut dyn InputSink, held: &[&KeyDef]) {
+    for key in held.iter().rev() {
+        input.send(event(key, true));
+    }
+}
+
+fn sleep_until(
+    clock: &dyn Sleeper,
+    mut duration: Duration,
+    interrupted: &dyn Fn() -> bool,
+) -> bool {
+    while !duration.is_zero() {
+        if interrupted() {
+            return false;
+        }
+        let chunk = duration.min(Duration::from_millis(10));
+        clock.sleep(chunk);
+        duration -= chunk;
+    }
+    !interrupted()
 }
 
 fn event(key: &KeyDef, is_up: bool) -> KeyEvent {
@@ -192,6 +261,61 @@ mod tests {
     const UP: bool = true;
 
     #[test]
+    fn capture_pause_releases_held_keys_and_skips_remaining_steps() {
+        use std::cell::Cell;
+        struct PauseClock<'a>(&'a Cell<bool>);
+        impl Sleeper for PauseClock<'_> {
+            fn sleep(&self, _: Duration) {
+                self.0.set(true);
+            }
+        }
+        for modifiers in [vec![], vec![Modifier::Ctrl, Modifier::Shift]] {
+            let paused = Cell::new(false);
+            let recorder = Recorder::default();
+            let action = sequence(vec![
+                step("KeyQ", modifiers.clone(), None),
+                step("KeyW", vec![], Some((1000, 1000))),
+            ]);
+            execute_key_sequence_until(
+                &action,
+                &mut recorder.clone(),
+                &PauseClock(&paused),
+                &mut StdRng::seed_from_u64(1),
+                &|| paused.get(),
+            )
+            .unwrap();
+            let first_code = if modifiers.is_empty() { 0x10 } else { 0x1D };
+            assert_eq!(
+                keys(&recorder.0.borrow()),
+                [(first_code, DOWN), (first_code, UP)]
+            );
+        }
+    }
+
+    #[test]
+    fn capture_pause_during_delay_never_presses_the_next_key() {
+        use std::cell::Cell;
+        struct PauseClock<'a>(&'a Cell<bool>);
+        impl Sleeper for PauseClock<'_> {
+            fn sleep(&self, _: Duration) {
+                self.0.set(true);
+            }
+        }
+        let paused = Cell::new(false);
+        let recorder = Recorder::default();
+        let action = sequence(vec![step("KeyQ", vec![], Some((1000, 1000)))]);
+        execute_key_sequence_until(
+            &action,
+            &mut recorder.clone(),
+            &PauseClock(&paused),
+            &mut StdRng::seed_from_u64(1),
+            &|| paused.get(),
+        )
+        .unwrap();
+        assert!(keys(&recorder.0.borrow()).is_empty());
+    }
+
+    #[test]
     fn presses_modifiers_around_the_key() {
         let action = sequence(vec![step(
             "Digit1",
@@ -258,7 +382,10 @@ mod tests {
             step("KeyQ", vec![], None),
             step("KeyW", vec![], Some((300, 600))),
         ]);
-        action.steps[0].hold_ms = DelayRange { min: 1000, max: 1500 };
+        action.steps[0].hold_ms = DelayRange {
+            min: 1000,
+            max: 1500,
+        };
         action.steps[1].hold_ms = DelayRange { min: 200, max: 300 };
         for seed in 0..100 {
             let entries = Recorder::run(&action, seed);
@@ -271,7 +398,10 @@ mod tests {
     fn fixed_and_zero_holds_are_exact() {
         for hold in [0, 1200] {
             let mut action = sequence(vec![step("KeyQ", vec![], None)]);
-            action.steps[0].hold_ms = DelayRange { min: hold, max: hold };
+            action.steps[0].hold_ms = DelayRange {
+                min: hold,
+                max: hold,
+            };
             for seed in 0..10 {
                 assert_eq!(
                     time_between(&Recorder::run(&action, seed), 0, 1),
@@ -291,7 +421,10 @@ mod tests {
             ),
             step("KeyW", vec![], Some((600, 600))),
         ]);
-        action.steps[0].hold_ms = DelayRange { min: 1200, max: 1200 };
+        action.steps[0].hold_ms = DelayRange {
+            min: 1200,
+            max: 1200,
+        };
         action.steps[1].hold_ms = DelayRange { min: 0, max: 0 };
         let entries = Recorder::run(&action, 1);
         assert_eq!(

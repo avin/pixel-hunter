@@ -57,16 +57,24 @@ export interface IconStatus {
 }
 
 /** Payload of the `pixel-capture://status` event. */
-export type CaptureStatus =
-  | { phase: "waitingForGame"; remainingMs: number }
-  | { phase: "countdown"; remainingMs: number }
+export interface CaptureSource {
+  sessionId: string;
+  profileId: string;
+  trackerId: string;
+  mode: "pixel" | "icon";
+}
+
+export type CaptureStatus = CaptureSource & (
+  | { phase: "starting" }
+  | { phase: "waitingForPrintScreen" }
+  | { phase: "capturing" }
   | { phase: "picking" }
   | { phase: "selectingSearch" }
   | { phase: "selectingTemplate" }
+  | { phase: "saving" }
   | { phase: "done" }
   | { phase: "cancelled" }
-  | { phase: "timeout" }
-  | { phase: "failed"; reason: string };
+  | { phase: "failed"; reason: string });
 
 export type Modifier = "ctrl" | "shift" | "alt";
 
@@ -177,6 +185,7 @@ export interface TrackerInput {
 
 /** Frame delivered to the prepared picker page. */
 export interface PickerFrame {
+  sessionId: string;
   profileId: string;
   pixelId: string;
   mode?: "pixel" | "icon";

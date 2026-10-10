@@ -1,4 +1,4 @@
-import { configureStore } from "@reduxjs/toolkit";
+import { configureStore, isPlain, type SerializableStateInvariantMiddlewareOptions } from "@reduxjs/toolkit";
 import { tauriApi } from "./api";
 import { engineSlice } from "./engineSlice";
 import { errorToastMiddleware } from "./errorToastMiddleware";
@@ -16,7 +16,12 @@ export function createAppStore() {
       [workSlice.name]: workSlice.reducer,
     },
     middleware: (getDefaultMiddleware) =>
-      getDefaultMiddleware().concat(tauriApi.middleware, errorToastMiddleware),
+      getDefaultMiddleware<{ serializableCheck: SerializableStateInvariantMiddlewareOptions }>({
+        serializableCheck: {
+          // The picker keeps the binary IPC response only until it draws the canvas.
+          isSerializable: (value) => value instanceof ArrayBuffer || isPlain(value),
+        },
+      }).concat(tauriApi.middleware, errorToastMiddleware),
   });
 }
 

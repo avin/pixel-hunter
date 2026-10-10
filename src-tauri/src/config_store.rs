@@ -195,7 +195,10 @@ mod tests {
         let crate::action::ActionKind::KeySequence(sequence) = &restored.action.kind else {
             unreachable!()
         };
-        assert_eq!(sequence.steps[0].hold_ms, crate::action::DEFAULT_STEP_HOLD_MS);
+        assert_eq!(
+            sequence.steps[0].hold_ms,
+            crate::action::DEFAULT_STEP_HOLD_MS
+        );
         loaded.store.update(|_| Ok(())).unwrap();
         assert_eq!(
             ConfigStore::load(dir.path())

@@ -44,15 +44,33 @@ impl Frame {
     }
 
     pub fn to_rgb_image(&self) -> RgbImage {
-        let rgb = self
+        let mut rgb = vec![0; self.width as usize * self.height as usize * 3];
+        for (source, target) in self
             .bgra
-            .chunks_exact(4)
-            .flat_map(|pixel| {
-                let Rgb { r, g, b } = bgra_to_rgb(pixel);
-                [r, g, b]
-            })
-            .collect();
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(rgb.as_chunks_mut::<3>().0)
+        {
+            target.copy_from_slice(&[source[2], source[1], source[0]]);
+        }
         RgbImage::from_raw(self.width, self.height, rgb).expect("frame buffer matches its size")
+    }
+
+    /// Binary picker IPC: little-endian dimensions, then tightly packed opaque RGBA.
+    pub fn picker_pixels(&self) -> Vec<u8> {
+        let mut pixels = Vec::with_capacity(8 + self.bgra.len());
+        pixels.extend_from_slice(&self.width.to_le_bytes());
+        pixels.extend_from_slice(&self.height.to_le_bytes());
+        pixels.extend_from_slice(&self.bgra);
+        for pixel in pixels[8..].as_chunks_mut::<4>().0 {
+            let blue = pixel[0];
+            pixel[0] = pixel[2];
+            pixel[2] = blue;
+            // Desktop Duplication does not guarantee useful alpha.
+            pixel[3] = 255;
+        }
+        pixels
     }
 }
 
@@ -686,5 +704,28 @@ mod tests {
             .map(|&(x, y)| frame.rgb_at(x, y).unwrap())
             .collect();
         assert_eq!(colors, expected);
+    }
+}
+
+#[cfg(test)]
+mod picker_pixel_tests {
+    use super::*;
+
+    #[test]
+    fn binary_pixels_preserve_geometry_color_and_source_with_opaque_alpha() {
+        let frame = Frame {
+            width: 2,
+            height: 1,
+            bgra: vec![10, 20, 30, 0, 100, 110, 120, 7],
+        };
+        assert_eq!(
+            frame.picker_pixels(),
+            vec![2, 0, 0, 0, 1, 0, 0, 0, 30, 20, 10, 255, 120, 110, 100, 255]
+        );
+        assert_eq!(frame.bgra, vec![10, 20, 30, 0, 100, 110, 120, 7]);
+        assert_eq!(
+            frame.to_rgb_image().as_raw(),
+            &vec![30, 20, 10, 120, 110, 100]
+        );
     }
 }

@@ -1,4 +1,5 @@
 import { Crosshair, ScanSearch } from "lucide-react";
+import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Table,
@@ -10,12 +11,14 @@ import {
   usePixelCaptureStartMutation,
   useIconCaptureStartMutation,
   useScreenshotsDirQuery,
+  tauriApi,
 } from "@/store/api";
-import { useAppDispatch, useAppSelector } from "@/store/hooks";
+import { useAppDispatch, useAppSelector, useAppStore } from "@/store/hooks";
 import {
   dismissCaptureStatus,
   isCapturingSelector,
   trackerCaptureStatusSelector,
+  captureIsWaiting,
 } from "@/store/pixelCaptureSlice";
 import type { Tracker } from "@/store/types";
 import { CaptureStatusPanel } from "./CaptureStatusPanel/CaptureStatusPanel";
@@ -24,26 +27,41 @@ import { IconRow } from "./IconRow/IconRow";
 
 interface Props {
   profileId: string;
-  processName: string;
   tracker: Tracker;
 }
 
-export function PixelsSection({ profileId, processName, tracker }: Props) {
+export function PixelsSection({ profileId, tracker }: Props) {
   const dispatch = useAppDispatch();
+  const store = useAppStore();
   const isCapturing = useAppSelector(isCapturingSelector);
   const status = useAppSelector((state) =>
-    trackerCaptureStatusSelector(state, tracker.id),
+    trackerCaptureStatusSelector(state, profileId, tracker.id),
   );
   const [startCapture] = usePixelCaptureStartMutation();
   const [startIconCapture] = useIconCaptureStartMutation();
   const [cancelCapture] = usePixelCaptureCancelMutation();
   const { data: screenshotsDir } = useScreenshotsDirQuery();
 
+  useEffect(() => () => {
+    const { active, status: currentStatus } = store.getState().pixelCapture;
+    if (active?.profileId === profileId && active.trackerId === tracker.id && captureIsWaiting(currentStatus)) {
+      void dispatch(tauriApi.endpoints.pixelCaptureCancel.initiate({ sessionId: active.sessionId }));
+    }
+  }, [dispatch, profileId, store, tracker.id]);
+
+  const isPixelActive = isCapturing && status?.mode === "pixel";
+  const isIconActive = isCapturing && status?.mode === "icon";
+  function cancelWaiting() {
+    if (status && captureIsWaiting(status)) void cancelCapture({ sessionId: status.sessionId });
+  }
+
   const addButton = (
     <Button
       size="sm"
-      disabled={isCapturing}
-      onClick={() => void startCapture({ profileId, trackerId: tracker.id })}
+      variant={isPixelActive ? "secondary" : "default"}
+      aria-pressed={isPixelActive}
+      disabled={isCapturing && (!isPixelActive || !captureIsWaiting(status))}
+      onClick={() => isPixelActive ? cancelWaiting() : void startCapture({ profileId, trackerId: tracker.id, sessionId: crypto.randomUUID() })}
     >
       <Crosshair />
       Добавить пиксель
@@ -53,17 +71,20 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
   return (
     <section aria-label="Визуальное" className="flex min-h-0 min-w-0 flex-1 flex-col border">
       <ConditionHeader profileId={profileId} tracker={tracker}>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {(captureIsWaiting(status) || status?.phase === "capturing") && (
+            <p role="status" aria-label="Состояние захвата" className="whitespace-nowrap text-xs text-muted-foreground">
+              Нажмите <span className="animate-capture-key-blink font-semibold text-capture-key-alert motion-reduce:animate-none">PrintScreen</span> в игре
+            </p>
+          )}
           {addButton}
-          <Button size="sm" disabled={isCapturing} onClick={() => void startIconCapture({ profileId, trackerId: tracker.id })}><ScanSearch />Добавить иконку</Button>
+          <Button size="sm" variant={isIconActive ? "secondary" : "default"} aria-pressed={isIconActive} disabled={isCapturing && (!isIconActive || !captureIsWaiting(status))} onClick={() => isIconActive ? cancelWaiting() : void startIconCapture({ profileId, trackerId: tracker.id, sessionId: crypto.randomUUID() })}><ScanSearch />Добавить иконку</Button>
         </div>
       </ConditionHeader>
 
-      {status && (
+      {status && !captureIsWaiting(status) && status.phase !== "capturing" && status.phase !== "saving" && (
         <CaptureStatusPanel
           status={status}
-          processName={processName}
-          onCancel={() => void cancelCapture()}
           onDismiss={() => dispatch(dismissCaptureStatus())}
         />
       )}
@@ -72,7 +93,7 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
         <div className="overflow-auto px-3 py-3">
           <h3 className="text-sm font-medium">Пикселей и иконок пока нет</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Добавьте пиксель или иконку. Переключитесь в игру, чтобы сделать снимок.
+            Добавьте пиксель или иконку, подготовьте экран и нажмите PrintScreen, чтобы сделать снимок.
             Для иконки сначала выделите область поиска, затем образец внутри неё.
           </p>
         </div>

@@ -445,3 +445,44 @@ mod tests {
         assert!(!screenshots.profile_dir(profile_id).exists());
     }
 }
+
+#[cfg(test)]
+mod capture_timing {
+    use super::*;
+    use crate::screen::Frame;
+    use std::time::Instant;
+
+    /// Synthetic CPU/file pipeline only: excludes DXGI, IPC, image decode and window show.
+    #[test]
+    #[ignore]
+    fn capture_pipeline_timing() {
+        let dir = tempfile::tempdir().unwrap();
+        for (width, height) in [(1920, 1080), (2560, 1440)] {
+            let frame = Frame {
+                width,
+                height,
+                bgra: (0..width as usize * height as usize * 4)
+                    .map(|i| ((i * 37 + i / 97) % 256) as u8)
+                    .collect(),
+            };
+            for sample in 0..3 {
+                let start = Instant::now();
+                let image = frame.to_rgb_image();
+                let converted = Instant::now();
+                save_stored_png(&dir.path().join("frame.png"), &image).unwrap();
+                let saved = Instant::now();
+                println!("{width}x{height} sample={sample} rgb_ms={:.3} stored_png_ms={:.3} cpu_file_total_ms={:.3}",
+                    (converted-start).as_secs_f64()*1000., (saved-converted).as_secs_f64()*1000., (saved-start).as_secs_f64()*1000.);
+                let start = Instant::now();
+                let pixels = frame.picker_pixels();
+                let converted = Instant::now();
+                let stored: std::sync::Arc<[u8]> = pixels.into();
+                let response = stored.to_vec();
+                let ready = Instant::now();
+                std::hint::black_box(response);
+                println!("{width}x{height} sample={sample} raw_rgba_ms={:.3} storage_and_response_copy_ms={:.3} raw_pre_ipc_total_ms={:.3}",
+                    (converted-start).as_secs_f64()*1000., (ready-converted).as_secs_f64()*1000., (ready-start).as_secs_f64()*1000.);
+            }
+        }
+    }
+}

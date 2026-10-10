@@ -16,7 +16,7 @@ use crate::pixel_capture::{
 };
 use crate::processes::{self, WindowedProcess};
 use crate::profiles::{self, IconInput, PixelInput, ProfileInput, TrackerInput};
-use crate::screen_overlay::{self, TauriCaptureEnv};
+use crate::screen_overlay::TauriCaptureEnv;
 use crate::screenshots::Screenshots;
 use crate::settings;
 use crate::tracker_hotkeys::TrackerHotkeyLink;
@@ -287,18 +287,20 @@ pub fn pixel_capture_start(
     app: AppHandle,
     store: State<'_, ConfigStore>,
     capture: State<'_, PixelCapture>,
+    session_id: Uuid,
     profile_id: Uuid,
     tracker_id: Uuid,
 ) -> AppResult<()> {
     profiles::profile_process_name(&store, profile_id, tracker_id)?;
     let request = CaptureRequest {
+        session_id,
         profile_id,
         tracker_id,
         mode: CaptureMode::Pixel,
     };
-    capture.start(move |commands| {
+    capture.start(session_id, move |sender, commands| {
         let _engine_paused = app.state::<Engine>().pause();
-        let env = TauriCaptureEnv::new(app.clone());
+        let env = TauriCaptureEnv::new(app.clone(), request, sender);
         let store = app.state::<ConfigStore>();
         let screenshots = app.state::<Screenshots>();
         pixel_capture::run_session(&env, &store, &screenshots, request, &commands);
@@ -311,18 +313,20 @@ pub fn icon_capture_start(
     app: AppHandle,
     store: State<'_, ConfigStore>,
     capture: State<'_, PixelCapture>,
+    session_id: Uuid,
     profile_id: Uuid,
     tracker_id: Uuid,
 ) -> AppResult<()> {
     profiles::profile_process_name(&store, profile_id, tracker_id)?;
     let request = CaptureRequest {
+        session_id,
         profile_id,
         tracker_id,
         mode: CaptureMode::Icon,
     };
-    capture.start(move |commands| {
+    capture.start(session_id, move |sender, commands| {
         let _engine_paused = app.state::<Engine>().pause();
-        let env = TauriCaptureEnv::new(app.clone());
+        let env = TauriCaptureEnv::new(app.clone(), request, sender);
         pixel_capture::run_session(
             &env,
             &app.state::<ConfigStore>(),
@@ -416,18 +420,20 @@ pub async fn icon_view_open(
     )
 }
 
-/// Without a running session there is nobody to hide a leftover picker, so it is hidden here.
-/// The warmed window stays alive for the next capture.
+/// Every cancellation addresses its source session, including delayed editor events.
 #[tauri::command]
-pub fn pixel_capture_cancel(app: AppHandle, capture: State<'_, PixelCapture>) {
-    if capture.send(CaptureCommand::Cancel).is_err() {
-        screen_overlay::hide(&app);
-    }
+pub fn pixel_capture_cancel(capture: State<'_, PixelCapture>, session_id: Uuid) {
+    capture.cancel(session_id);
 }
 
 #[tauri::command]
-pub fn pixel_capture_pick(capture: State<'_, PixelCapture>, x: u32, y: u32) -> AppResult<()> {
-    capture.send(CaptureCommand::Pick { x, y })
+pub fn pixel_capture_pick(
+    capture: State<'_, PixelCapture>,
+    session_id: Uuid,
+    x: u32,
+    y: u32,
+) -> AppResult<()> {
+    capture.send_for(session_id, CaptureCommand::Pick { x, y })
 }
 
 // WebView2 window creation deadlocks in synchronous commands on Windows.

@@ -285,7 +285,10 @@ mod tests {
             step("KeyQ", vec![], None),
             step("KeyW", vec![], Some(DelayRange { min: 300, max: 600 })),
         ]);
-        action.steps[1].hold_ms = DelayRange { min: 1000, max: 1500 };
+        action.steps[1].hold_ms = DelayRange {
+            min: 1000,
+            max: 1500,
+        };
 
         action.steps.remove(0);
         action.normalize();
@@ -293,7 +296,10 @@ mod tests {
         assert_eq!(action.steps[0].delay_before_ms, None);
         assert_eq!(
             action.steps[0].hold_ms,
-            DelayRange { min: 1000, max: 1500 }
+            DelayRange {
+                min: 1000,
+                max: 1500
+            }
         );
     }
 
@@ -311,7 +317,10 @@ mod tests {
             assert!(action.validate().is_ok());
         }
         let mut action = sequence(vec![step("KeyQ", vec![], None)]);
-        action.steps[0].hold_ms = DelayRange { min: 3000, max: 2000 };
+        action.steps[0].hold_ms = DelayRange {
+            min: 3000,
+            max: 2000,
+        };
         assert!(matches!(action.validate(), Err(AppError::Validation(_))));
     }
 
@@ -327,7 +336,10 @@ mod tests {
         let explicit: KeyStep = serde_json::from_value(value.clone()).unwrap();
         assert_eq!(
             explicit.hold_ms,
-            DelayRange { min: 2000, max: 3000 }
+            DelayRange {
+                min: 2000,
+                max: 3000
+            }
         );
         assert_eq!(
             serde_json::to_value(explicit).unwrap()["holdMs"],

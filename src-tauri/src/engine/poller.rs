@@ -2,7 +2,7 @@
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use rand::Rng;
@@ -92,6 +92,7 @@ pub struct Poller<E, I> {
     pub jobs: Sender<Job>,
     pub cancelled: Arc<CancelledJobs>,
     pub paused: Arc<AtomicBool>,
+    pub polling: Arc<Mutex<()>>,
     pub emit: E,
     pub emit_icon: I,
     pub screenshot_root: PathBuf,
@@ -131,6 +132,8 @@ impl<E: Fn(EngineStatus), I: Fn(IconStatus)> Poller<E, I> {
             tick_log.record(tick_start);
             let due = deadlines.next(tick_start);
 
+            let polling = self.polling.clone();
+            let poll_guard = polling.lock().unwrap_or_else(PoisonError::into_inner);
             let paused = self.paused.load(Ordering::SeqCst);
             let game_active = session.refresh_game(&self.emit);
             let capture = self.key_capture.load(Ordering::SeqCst);
@@ -141,6 +144,7 @@ impl<E: Fn(EngineStatus), I: Fn(IconStatus)> Poller<E, I> {
             for job in session.tick(tick_start, paused, &presses, rng, &self.emit_icon) {
                 let _ = self.jobs.send(job);
             }
+            drop(poll_guard);
 
             loop {
                 let remaining = due.saturating_sub(clock());

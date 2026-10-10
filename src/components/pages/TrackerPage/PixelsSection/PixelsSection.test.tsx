@@ -1,10 +1,11 @@
 import { emit } from "@tauri-apps/api/event";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { CAPTURE_STATUS_EVENT } from "@/hooks/usePixelCaptureEvents";
+
 import type { CaptureStatus, Icon, Pixel } from "@/store/types";
 import {
   createFakeBackend,
+  type FakeBackend,
   pixelFixture,
   iconFixture,
   keyStepFixture,
@@ -13,20 +14,25 @@ import {
 } from "@/test/fakeBackend";
 import { renderApp } from "@/test/renderApp";
 
+let activeBackend: FakeBackend;
+
 async function openTracker(pixels: Pixel[] = [], icons: Icon[] = []) {
   const rendered = renderApp(
     createFakeBackend({
       profiles: [profileFixture({ trackers: [trackerFixture({ pixels, icons })] })],
     }),
   );
+  activeBackend = rendered.backend;
   await rendered.user.click(await screen.findByRole("link", { name: "Diablo" }));
   await rendered.user.click(screen.getByRole("link", { name: "Здоровье" }));
   await screen.findByRole("button", { name: "Добавить пиксель" });
   return rendered;
 }
 
-async function emitStatus(status: CaptureStatus) {
-  await act(() => emit(CAPTURE_STATUS_EVENT, status));
+async function emitStatus(status: { phase: CaptureStatus["phase"]; reason?: string }) {
+  const current = activeBackend.state.captureStatus;
+  if (!current) throw new Error("No active capture");
+  await act(() => activeBackend.emitCaptureStatus({ ...current, ...status } as CaptureStatus));
 }
 
 const addButton = () => screen.getByRole("button", { name: "Добавить пиксель" });
@@ -41,108 +47,222 @@ const toleranceInput = (point = "(812, 1040)") =>
   screen.getByRole("spinbutton", { name: `Допуск пикселя ${point}, %` });
 
 describe("Pixel capture on TrackerPage", () => {
-  it("waits for the game with a countdown from 10 seconds", async () => {
+  it("waits for PrintScreen until the active button cancels it", async () => {
     const { user, backend } = await openTracker();
-
     await user.click(addButton());
-
-    expect(backend.callsOf("pixel_capture_start")).toEqual([
-      { profileId: "profile-1", trackerId: "tracker-1" },
-    ]);
-    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent(
-      "Переключитесь в окно игры game.exe",
-    );
-    expect(screen.getByText("10 с")).toBeInTheDocument();
-    expect(addButton()).toBeDisabled();
+    expect(backend.callsOf("pixel_capture_start")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1", sessionId: expect.any(String) }]);
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Нажмите PrintScreen в игре");
+    expect(addButton()).toHaveAttribute("aria-pressed", "true");
+    expect(addButton()).toBeEnabled();
+    expect(addIconButton()).toBeDisabled();
+    expect(screen.queryByText("10 с")).not.toBeInTheDocument();
+    const sessionId = backend.state.captureStatus?.sessionId;
+    await user.click(addButton());
+    await waitFor(() => expect(addButton()).toHaveAttribute("aria-pressed", "false"));
+    expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]);
+    expect(addIconButton()).toBeEnabled();
   });
 
-  it("follows the capture phases and shows the added pixel", async () => {
+  it("keeps the same PrintScreen hint while the backend starts", async () => {
+    const { user, backend } = await openTracker();
+    const release = backend.hold("pixel_capture_start");
+    await user.click(addButton());
+    expect(addButton()).toHaveAttribute("aria-pressed", "true");
+    expect(addButton()).toBeEnabled();
+    expect(addIconButton()).toBeDisabled();
+    const hint = screen.getByRole("status", { name: "Состояние захвата" });
+    expect(hint).toHaveTextContent("Нажмите PrintScreen в игре");
+    expect(screen.queryByText(/Подготавливаем захват/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Отмена" })).not.toBeInTheDocument();
+    await act(async () => release());
+    await waitFor(() => expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Нажмите PrintScreen в игре"));
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toBe(hint);
+  });
+
+  it("follows capture and picking, then refreshes the added pixel", async () => {
     const { user, backend } = await openTracker();
     await user.click(addButton());
-
-    await emitStatus({ phase: "waitingForGame", remainingMs: 7_400 });
-    expect(screen.getByText("8 с")).toBeInTheDocument();
-
-    await emitStatus({ phase: "countdown", remainingMs: 200 });
-    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent(
-      "Делаем снимок экрана...",
-    );
-    expect(screen.queryByText("200 мс")).not.toBeInTheDocument();
-
+    const hint = screen.getByRole("status", { name: "Состояние захвата" });
+    await emitStatus({ phase: "capturing" });
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toBe(hint);
+    expect(hint).toHaveTextContent("Нажмите PrintScreen в игре");
+    expect(screen.queryByText(/Делаем снимок экрана/)).not.toBeInTheDocument();
+    expect(addButton()).toBeDisabled();
+    expect(addButton()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "Отмена" })).not.toBeInTheDocument();
     await emitStatus({ phase: "picking" });
     expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Выберите точку на снимке");
-    expect(addButton()).toBeDisabled();
-
     backend.state.profiles[0].trackers[0].pixels.push(pixelFixture());
     await emitStatus({ phase: "done" });
-
     expect(await screen.findByRole("combobox", { name: "Условие пикселя (812, 1040)" })).toBeInTheDocument();
-    expect(conditionSelect()).toHaveTextContent("Равен цвету");
-    expect(toleranceInput()).toHaveValue(10);
-    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
+    expect(addButton()).toHaveAttribute("aria-pressed", "false");
     expect(addButton()).toBeEnabled();
   });
 
-  it("cancels the capture", async () => {
+  it.each(["pixel", "icon"] as const)("keeps %s capture pressed during background saving without a status panel", async (mode) => {
     const { user, backend } = await openTracker();
-    await user.click(addButton());
-
-    await user.click(screen.getByRole("button", { name: "Отмена" }));
-    expect(backend.callsOf("pixel_capture_cancel")).toHaveLength(1);
-
-    await emitStatus({ phase: "cancelled" });
+    const activeButton = mode === "pixel" ? addButton : addIconButton;
+    await user.click(activeButton());
+    await emitStatus({ phase: mode === "pixel" ? "picking" : "selectingTemplate" });
+    await emitStatus({ phase: "saving" });
+    expect(activeButton()).toHaveAttribute("aria-pressed", "true");
+    expect(addButton()).toBeDisabled();
+    expect(addIconButton()).toBeDisabled();
     expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/сохраняем|сохранение/i)).not.toBeInTheDocument();
+    await emitStatus({ phase: mode === "pixel" ? "picking" : "selectingTemplate" });
+    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
+    if (mode === "pixel") backend.state.profiles[0].trackers[0].pixels.push(pixelFixture());
+    else backend.state.profiles[0].trackers[0].icons.push(iconFixture());
+    await emitStatus({ phase: "done" });
+    expect(await screen.findByRole("combobox", { name: mode === "pixel" ? "Условие пикселя (812, 1040)" : "Условие иконки (40, 50)" })).toBeInTheDocument();
+    expect(activeButton()).toHaveAttribute("aria-pressed", "false");
     expect(addButton()).toBeEnabled();
-    expect(await screen.findByText("Пикселей и иконок пока нет")).toBeInTheDocument();
+    expect(addIconButton()).toBeEnabled();
   });
 
-  it("reports that the game window was not activated", async () => {
+  it.each(["pixel", "icon"] as const)("shows the %s save error after background saving fails", async (mode) => {
+    const { user } = await openTracker();
+    const activeButton = mode === "pixel" ? addButton : addIconButton;
+    await user.click(activeButton());
+    await emitStatus({ phase: "saving" });
+    await emitStatus({ phase: "failed", reason: "Не удалось сохранить снимок" });
+    expect(screen.getByRole("alert")).toHaveTextContent("Не удалось сохранить снимок");
+    expect(activeButton()).toHaveAttribute("aria-pressed", "false");
+    expect(addButton()).toBeEnabled();
+    expect(addIconButton()).toBeEnabled();
+    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Визуальные условия" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the failure reason and allows an explicit new capture", async () => {
     const { user } = await openTracker();
     await user.click(addButton());
-
-    await emitStatus({ phase: "timeout" });
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Окно игры не стало активным за 10 секунд",
-    );
+    await emitStatus({ phase: "failed", reason: "Не удалось захватить экран: доступ запрещён" });
+    expect(screen.getByRole("alert")).toHaveTextContent("Не удалось захватить экран: доступ запрещён");
     expect(addButton()).toBeEnabled();
+    expect(addButton()).toHaveAttribute("aria-pressed", "false");
+    await user.click(addIconButton());
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(addIconButton()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Нажмите PrintScreen в игре");
+  });
 
+  it("reports a failed start and dismisses its reason", async () => {
+    const { user, backend } = await openTracker();
+    backend.failOn("pixel_capture_start", "Перехват недоступен");
+    await user.click(addButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent("Перехват недоступен");
+    expect(addButton()).toBeEnabled();
+    expect(addButton()).toHaveAttribute("aria-pressed", "false");
     await user.click(screen.getByRole("button", { name: "Закрыть" }));
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("reports a failed snapshot", async () => {
-    const { user } = await openTracker();
-    await user.click(addButton());
-
-    await emitStatus({ phase: "failed", reason: "Не удалось захватить экран: доступ запрещён" });
-
-    expect(screen.getByRole("alert")).toHaveTextContent(
-      "Не удалось захватить экран: доступ запрещён",
-    );
-    expect(addButton()).toBeEnabled();
-  });
-
-  it("keeps the button disabled after leaving the tracker during a capture", async () => {
-    const { user } = await openTracker();
-    await user.click(addButton());
-
-    await user.click(screen.getByRole("link", { name: "Назад" }));
-    await user.click(screen.getByRole("link", { name: "Здоровье" }));
-
-    expect(await screen.findByRole("button", { name: "Добавить пиксель" })).toBeDisabled();
-    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Переключитесь в окно игры");
-  });
-
-  it("shows the error when a capture cannot start", async () => {
+  it("ignores previous session events after a new capture starts", async () => {
     const { user, backend } = await openTracker();
-    backend.failOn("pixel_capture_start", "Захват пикселя уже идёт");
-
     await user.click(addButton());
+    const old = backend.state.captureStatus!;
+    await user.click(addButton());
+    await waitFor(() => expect(addButton()).toHaveAttribute("aria-pressed", "false"));
+    await user.click(addIconButton());
+    for (const phase of ["cancelled", "failed", "done", "waitingForPrintScreen"] as const) {
+      await act(() => backend.emitCaptureStatus({ ...old, phase, reason: "Old error" } as CaptureStatus));
+      expect(addIconButton()).toHaveAttribute("aria-pressed", "true");
+      expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Нажмите PrintScreen в игре");
+    }
+  });
 
-    expect(await screen.findByText("Захват пикселя уже идёт")).toBeInTheDocument();
-    await waitFor(() => expect(addButton()).toBeEnabled());
-    expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
+  it("cancels waiting on Back and allows a new capture after returning", async () => {
+    const { user, backend } = await openTracker();
+    await user.click(addButton());
+    const sessionId = backend.state.captureStatus?.sessionId;
+    await user.click(screen.getByRole("link", { name: "Назад" }));
+    await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+    expect(await screen.findByRole("button", { name: "Добавить пиксель" })).toBeEnabled();
+    expect(addButton()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  it.each(["picking", "saving"] as const)("does not cancel a %s session on navigation", async (phase) => {
+    const { user, backend } = await openTracker();
+    await user.click(addButton());
+    await emitStatus({ phase });
+    await user.click(screen.getByRole("link", { name: "Назад" }));
+    expect(backend.callsOf("pixel_capture_cancel")).toEqual([]);
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+    expect(await screen.findByRole("button", { name: "Добавить пиксель" })).toBeDisabled();
+    expect(addButton()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it.each(["/profiles/profile-1/trackers/tracker-2", "/profiles/profile-2/trackers/tracker-1", "/"])("cancels the source session when navigating to %s", async (destination) => {
+    const backend = createFakeBackend({ profiles: [
+      profileFixture({ trackers: [trackerFixture(), trackerFixture({ id: "tracker-2", name: "Мана" })] }),
+      profileFixture({ id: "profile-2", name: "Другая игра", trackers: [trackerFixture()] }),
+    ] });
+    const { user, router } = renderApp(backend, ["/profiles/profile-1/trackers/tracker-1"]);
+    await user.click(await screen.findByRole("button", { name: "Добавить пиксель" }));
+    const sessionId = backend.state.captureStatus?.sessionId;
+    await act(() => router.navigate(destination));
+    await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]));
+  });
+
+  it("cancels waiting when the source tracker is deleted", async () => {
+    const { user, backend } = await openTracker();
+    await user.click(addButton());
+    const sessionId = backend.state.captureStatus?.sessionId;
+    await user.click(screen.getByRole("button", { name: "Удалить отслеживание «Здоровье»" }));
+    await user.click(await screen.findByRole("button", { name: "Удалить" }));
+    await waitFor(() => expect(backend.state.profiles[0].trackers).toHaveLength(0));
+    await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]));
+  });
+
+  it("cancels starting and ignores a late failed start after a new session", async () => {
+    const { user, backend } = await openTracker();
+    const release = backend.hold("pixel_capture_start");
+    await user.click(addButton());
+    const sessionId = backend.callsOf("pixel_capture_start")[0].sessionId;
+    await user.click(addButton());
+    await waitFor(() => expect(addButton()).toHaveAttribute("aria-pressed", "false"));
+    expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]);
+    await user.click(addIconButton());
+    backend.failOn("pixel_capture_start", "Ошибка прежнего запуска");
+    await act(async () => release());
+    expect(addIconButton()).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent("Нажмите PrintScreen в игре");
+  });
+
+  it("cancels starting on navigation without a late waiting state", async () => {
+    const { user, backend } = await openTracker();
+    const release = backend.hold("pixel_capture_start");
+    await user.click(addButton());
+    const sessionId = backend.callsOf("pixel_capture_start")[0].sessionId;
+    await user.click(screen.getByRole("link", { name: "Назад" }));
+    await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]));
+    await act(async () => release());
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+    expect(await screen.findByRole("button", { name: "Добавить пиксель" })).toHaveAttribute("aria-pressed", "false");
+    expect(backend.state.captureStatus).toBeNull();
+  });
+
+  it("preserves waiting when focus is lost or the document is hidden", async () => {
+    const { user, backend } = await openTracker();
+    await user.click(addButton());
+    fireEvent.blur(window);
+    fireEvent(document, new Event("visibilitychange"));
+    await user.keyboard("{Escape}");
+    expect(backend.callsOf("pixel_capture_cancel")).toEqual([]);
+    expect(addButton()).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("cancels waiting when visual buttons disappear for the hotkey trigger", async () => {
+    const { user, backend } = await openTracker();
+    await user.click(addIconButton());
+    const sessionId = backend.state.captureStatus?.sessionId;
+    await user.click(screen.getByRole("combobox", { name: "Условие" }));
+    await user.click(await screen.findByRole("option", { name: "Хоткей" }));
+    await screen.findByRole("button", { name: "Назначить" });
+    await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toEqual([{ sessionId }]));
   });
 });
 
@@ -318,7 +438,7 @@ describe("Icon conditions on TrackerPage", () => {
   it("starts a separate icon capture and blocks both buttons through both selections", async () => {
     const { user, backend } = await openTracker();
     await user.click(addIconButton());
-    expect(backend.callsOf("icon_capture_start")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1" }]);
+    expect(backend.callsOf("icon_capture_start")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1", sessionId: expect.any(String) }]);
     expect(backend.callsOf("pixel_capture_start")).toEqual([]);
     for (const phase of ["selectingSearch", "selectingTemplate"] as const) {
       await emitStatus({ phase });

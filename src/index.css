@@ -6,6 +6,9 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  --animate-capture-key-blink: capture-key-blink 1.2s steps(1, end) infinite;
+  --color-capture-key-idle: #000000;
+  --color-capture-key-alert: #ff0000;
   --animate-pixel-marker-motion: pixel-marker-motion 3s linear infinite;
   --animate-region-marker-flow: region-marker-flow 3s linear infinite;
   --animate-preview-marker-color: preview-marker-color 3s linear infinite;
@@ -57,6 +60,11 @@
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+@keyframes capture-key-blink {
+  0%, 100% { color: var(--color-capture-key-idle); }
+  50% { color: var(--color-capture-key-alert); }
 }
 
 @keyframes region-marker-flow {

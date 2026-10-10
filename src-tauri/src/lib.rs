@@ -13,6 +13,7 @@ mod key_sequence;
 mod keyboard;
 mod network;
 mod pixel_capture;
+mod printscreen;
 mod processes;
 mod profiles;
 mod screen;
@@ -108,7 +109,9 @@ pub fn run() {
                 Box::new(hotkey::OsShortcuts::new(app.handle().clone())),
                 Arc::clone(&pause) as Arc<dyn hotkey::ShortcutMute>,
                 app_data_dir.join("screenshots"),
-                move |status| { let _ = icon_emitter.emit(engine::ICON_STATUS_EVENT, status); },
+                move |status| {
+                    let _ = icon_emitter.emit(engine::ICON_STATUS_EVENT, status);
+                },
             );
             app.manage(engine);
             app.manage(tracker_hotkeys);
@@ -173,6 +176,7 @@ pub fn run() {
             screenshot_viewer::screenshot_view_failed,
             screen_overlay::picker_ready,
             screen_overlay::picker_frame,
+            screen_overlay::picker_pixels,
             screen_overlay::picker_frame_drawn,
             screen_overlay::picker_frame_failed,
             commands::screenshots_dir,
@@ -181,6 +185,16 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
+            if let tauri::RunEvent::ExitRequested { api, code, .. } = &event {
+                if code.is_none() {
+                    api.prevent_exit();
+                    let app = app.clone();
+                    std::thread::spawn(move || {
+                        app.state::<PixelCapture>().shutdown();
+                        app.exit(0);
+                    });
+                }
+            }
             if matches!(event, tauri::RunEvent::Exit) {
                 app.state::<action_sound::AudioService>().shutdown();
             }

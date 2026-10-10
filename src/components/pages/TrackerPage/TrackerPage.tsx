@@ -97,7 +97,6 @@ export function TrackerPage() {
           ) : (
             <PixelsSection
               profileId={profileId}
-              processName={profile.processName}
               tracker={tracker}
             />
           )

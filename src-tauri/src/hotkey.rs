@@ -165,9 +165,7 @@ impl<H: ShortcutHost> HotkeyBinding<H> {
             modifiers: accelerator.modifiers.clone(),
             key: accelerator.key.clone(),
         };
-        if store
-            .read(|config| settings::tracker_uses_combo(config, &normalized))
-        {
+        if store.read(|config| settings::tracker_uses_combo(config, &normalized)) {
             return Err(AppError::Validation(
                 "Это сочетание уже назначено отслеживанию".into(),
             ));
@@ -407,7 +405,11 @@ mod tests {
             Some(combo(vec![Modifier::Ctrl], "KeyQ"))
         );
         assert_eq!(
-            binding.host.registered.as_ref().map(|item| item.key.as_str()),
+            binding
+                .host
+                .registered
+                .as_ref()
+                .map(|item| item.key.as_str()),
             Some("KeyQ")
         );
         assert_eq!(
@@ -445,17 +447,38 @@ mod tests {
     #[test]
     fn key_capture_unregisters_until_it_ends_and_assignment_still_drops_the_shortcut() {
         let mut binding = HotkeyBinding::install(Some(combo(vec![], "F5")), FakeHost::default());
-        assert_eq!(binding.host.registered.as_ref().map(|item| item.key.as_str()), Some("F5"));
+        assert_eq!(
+            binding
+                .host
+                .registered
+                .as_ref()
+                .map(|item| item.key.as_str()),
+            Some("F5")
+        );
 
         binding.begin_capture();
         assert!(binding.host.registered.is_none());
         binding.end_capture();
-        assert_eq!(binding.host.registered.as_ref().map(|item| item.key.as_str()), Some("F5"));
+        assert_eq!(
+            binding
+                .host
+                .registered
+                .as_ref()
+                .map(|item| item.key.as_str()),
+            Some("F5")
+        );
 
         binding.begin_assign();
         assert!(binding.host.registered.is_none());
         binding.cancel_assign();
-        assert_eq!(binding.host.registered.as_ref().map(|item| item.key.as_str()), Some("F5"));
+        assert_eq!(
+            binding
+                .host
+                .registered
+                .as_ref()
+                .map(|item| item.key.as_str()),
+            Some("F5")
+        );
     }
 
     #[test]

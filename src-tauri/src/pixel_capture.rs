@@ -1,4 +1,6 @@
-//! Interactive pixel capture: wait for the game, count down, snapshot, let the user pick a point.
+//! One session owns PrintScreen, hidden editor preparation and the captured frame.
+//! The session slot is released only after hook/editor cleanup and capture pause have dropped.
+//! PrintScreen and cancellation are serialized through its command channel; editor presses are ignored.
 
 use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -14,44 +16,38 @@ use uuid::Uuid;
 use crate::config::{Icon, PhysicalRect, Pixel};
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
-use crate::foreground::WindowHandle;
 use crate::profiles;
 use crate::screen::Frame;
 use crate::screenshots::{self, Screenshots};
 
 pub const STATUS_EVENT: &str = "pixel-capture://status";
-const WAIT_FOR_GAME: Duration = Duration::from_secs(10);
-const COUNTDOWN: Duration = Duration::from_millis(200);
 const PREPARE_LIMIT: Duration = Duration::from_secs(10);
 const FRAME_LIMIT: Duration = Duration::from_secs(10);
-const POLL_INTERVAL: Duration = Duration::from_millis(100);
 const PREPARE_FAILED: &str = "Не удалось подготовить окно выбора";
 const FRAME_FAILED: &str = "Не удалось показать снимок";
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "phase", rename_all = "camelCase")]
 pub enum CaptureStatus {
-    #[serde(rename_all = "camelCase")]
-    WaitingForGame {
-        remaining_ms: u64,
-    },
-    #[serde(rename_all = "camelCase")]
-    Countdown {
-        remaining_ms: u64,
-    },
+    Starting,
+    WaitingForPrintScreen,
+    Capturing,
     Picking,
     SelectingSearch,
     SelectingTemplate,
+    Saving,
     Done,
     Cancelled,
-    Timeout,
-    Failed {
-        reason: String,
-    },
+    Failed { reason: String },
 }
 
 #[derive(Debug, Clone)]
 pub enum CaptureCommand {
+    PrintScreen,
+    PrepareFailed(String),
+    PrepareReady,
+    FrameReady,
+    FrameFailed,
     Pick {
         x: u32,
         y: u32,
@@ -92,6 +88,7 @@ pub struct SelectionReply {
 
 #[derive(Debug, Clone, Copy)]
 pub struct CaptureRequest {
+    pub session_id: Uuid,
     pub profile_id: Uuid,
     pub tracker_id: Uuid,
     pub mode: CaptureMode,
@@ -101,29 +98,46 @@ pub struct CaptureRequest {
 pub trait CaptureEnv {
     /// Monotonic time since the session started.
     fn now(&self) -> Duration;
-    fn sleep(&self, duration: Duration);
-    /// The foreground window when it belongs to `process_name`.
-    fn foreground_game(&self, process_name: &str) -> Option<WindowHandle>;
-    /// Starts hidden-window and shutter preparation. Polled with [`prepare_result`].
+    /// Blocks until an input/readiness notification or the technical fault deadline.
+    fn wait_notification(
+        &self,
+        commands: &Receiver<CaptureCommand>,
+        duration: Duration,
+    ) -> Option<CaptureCommand> {
+        match commands.recv_timeout(duration) {
+            Ok(command) => Some(command),
+            Err(mpsc::RecvTimeoutError::Timeout) => None,
+            Err(mpsc::RecvTimeoutError::Disconnected) => Some(CaptureCommand::Cancel),
+        }
+    }
+    fn begin_wait(&self) -> AppResult<()>;
+    fn end_wait(&self);
+    fn cleanup_prepare(&self) {}
+    /// Starts hidden preparation; readiness changes wake the session command channel.
     fn begin_prepare(&self);
     fn prepare_result(&self) -> Option<AppResult<()>>;
     fn capture_frame(&self) -> AppResult<Frame>;
     fn write_screenshot(&self, path: &Path, image: &RgbImage) -> AppResult<()>;
-    /// Tells the already loaded picker page which file to decode. The window stays hidden.
-    fn publish_frame(&self, request: CaptureRequest, pixel_id: Uuid) -> AppResult<()>;
+    /// Publishes in-memory pixels for the loaded picker page; the window stays hidden.
+    fn publish_frame(
+        &self,
+        request: CaptureRequest,
+        pixel_id: Uuid,
+        frame: &Frame,
+    ) -> AppResult<()>;
     fn frame_result(&self) -> Option<AppResult<()>>;
     fn hide_picker(&self);
-    fn minimize_game(&self, game: WindowHandle);
     /// Plays the shutter and reveals the picker as one step.
     fn reveal_picker(&self) -> AppResult<()>;
     /// Hides the picker and activates the main window.
     fn close_picker(&self);
+    /// Acknowledges a validated selection; final choices close before persistence starts.
+    fn selection_accepted(&self, final_selection: bool);
     fn emit(&self, status: CaptureStatus);
 }
 
 enum Stop {
     Cancelled,
-    Timeout,
     Failed(AppError),
 }
 
@@ -147,13 +161,15 @@ pub fn run_session(
             screenshots.remove_icon(request.profile_id, pixel_id);
             match stop {
                 Stop::Cancelled => CaptureStatus::Cancelled,
-                Stop::Timeout => CaptureStatus::Timeout,
                 Stop::Failed(error) => CaptureStatus::Failed {
                     reason: error.to_string(),
                 },
             }
         }
     };
+    env.end_wait();
+    env.cleanup_prepare();
+    env.hide_picker();
     env.emit(status);
 }
 
@@ -165,41 +181,42 @@ fn capture(
     pixel_id: Uuid,
     commands: &Receiver<CaptureCommand>,
 ) -> Result<(), Stop> {
-    let process_name =
-        profiles::profile_process_name(store, request.profile_id, request.tracker_id)?;
+    env.emit(CaptureStatus::Starting);
+    profiles::profile_process_name(store, request.profile_id, request.tracker_id)?;
+    let mut early_press = false;
+    loop {
+        match commands.try_recv() {
+            Ok(CaptureCommand::Cancel | CaptureCommand::OverlayClosed)
+            | Err(TryRecvError::Disconnected) => return Err(Stop::Cancelled),
+            Ok(CaptureCommand::PrintScreen) => early_press = true,
+            Ok(CaptureCommand::Select { reply, .. }) => {
+                let _ = reply.send(Err(AppError::Validation("Выбор ещё не готов".into())));
+            }
+            Ok(_) => {}
+            Err(TryRecvError::Empty) => break,
+        }
+    }
+    env.begin_wait()?;
     let prepare_started = env.now();
     env.begin_prepare();
-
-    let game = match wait_for_game(env, &process_name, commands) {
-        Ok(game) => match count_down(env, commands) {
-            Ok(()) => Ok(game),
-            Err(stop) => Err(stop),
-        },
-        Err(stop) => Err(stop),
+    env.emit(CaptureStatus::WaitingForPrintScreen);
+    let triggered = if early_press {
+        Ok(())
+    } else {
+        wait_for_printscreen(commands)
     };
-    let game = match game {
-        Ok(game) => game,
-        Err(stop) => {
-            finish_prepare(env, prepare_started);
-            return Err(stop);
-        }
-    };
-    match wait_for_prepare(env, commands, prepare_started) {
-        Ok(()) => {}
-        Err(Stop::Cancelled) => {
-            finish_prepare(env, prepare_started);
-            return Err(Stop::Cancelled);
-        }
-        Err(stop) => return Err(stop),
+    if let Err(stop) = triggered {
+        env.end_wait();
+        return Err(stop);
     }
-
+    env.emit(CaptureStatus::Capturing);
+    // Capture before waiting for the cold editor to finish loading.
     let frame = env.capture_frame()?;
-    let image = frame.to_rgb_image();
-    env.write_screenshot(
-        &screenshots.image_path(request.profile_id, pixel_id),
-        &image,
-    )?;
-    if let Err(error) = env.publish_frame(request, pixel_id) {
+    if let Err(stop) = wait_for_prepare(env, commands, prepare_started) {
+        env.end_wait();
+        return Err(stop);
+    }
+    if let Err(error) = env.publish_frame(request, pixel_id, &frame) {
         env.hide_picker();
         return Err(error.into());
     }
@@ -208,7 +225,6 @@ fn capture(
         return Err(stop);
     }
 
-    env.minimize_game(game);
     if let Err(error) = env.reveal_picker() {
         env.close_picker();
         return Err(error.into());
@@ -217,17 +233,20 @@ fn capture(
         CaptureMode::Pixel => CaptureStatus::Picking,
         CaptureMode::Icon => CaptureStatus::SelectingSearch,
     });
+    let mut editor_closed = false;
     let picked = pick(
         store,
         screenshots,
         request,
         pixel_id,
         &frame,
-        &image,
         commands,
         env,
+        &mut editor_closed,
     );
-    env.close_picker();
+    if !editor_closed {
+        env.close_picker();
+    }
     picked
 }
 
@@ -245,23 +264,9 @@ fn wait_for_prepare(
                 if elapsed >= PREPARE_LIMIT {
                     return Err(Stop::Failed(AppError::Capture(PREPARE_FAILED.into())));
                 }
-                env.sleep(POLL_INTERVAL.min(PREPARE_LIMIT - elapsed));
+                handle_readiness_command(env.wait_notification(commands, PREPARE_LIMIT - elapsed))?;
             }
         }
-    }
-}
-
-/// Waits out preparation after the session has already stopped, so a late window cannot appear.
-fn finish_prepare(env: &impl CaptureEnv, started: Duration) {
-    loop {
-        if env.prepare_result().is_some() {
-            return;
-        }
-        let elapsed = env.now().saturating_sub(started);
-        if elapsed >= PREPARE_LIMIT {
-            return;
-        }
-        env.sleep(POLL_INTERVAL.min(PREPARE_LIMIT - elapsed));
     }
 }
 
@@ -277,57 +282,63 @@ fn wait_for_frame(env: &impl CaptureEnv, commands: &Receiver<CaptureCommand>) ->
                 if elapsed >= FRAME_LIMIT {
                     return Err(Stop::Failed(AppError::Capture(FRAME_FAILED.into())));
                 }
-                env.sleep(POLL_INTERVAL.min(FRAME_LIMIT - elapsed));
+                handle_readiness_command(env.wait_notification(commands, FRAME_LIMIT - elapsed))?;
             }
         }
     }
 }
 
-fn wait_for_game(
-    env: &impl CaptureEnv,
-    process_name: &str,
-    commands: &Receiver<CaptureCommand>,
-) -> Result<WindowHandle, Stop> {
-    let started = env.now();
-    loop {
-        check_cancelled(commands)?;
-        if let Some(game) = env.foreground_game(process_name) {
-            return Ok(game);
+fn handle_readiness_command(command: Option<CaptureCommand>) -> Result<(), Stop> {
+    match command {
+        Some(CaptureCommand::Cancel | CaptureCommand::OverlayClosed) => Err(Stop::Cancelled),
+        Some(CaptureCommand::PrepareFailed(reason)) => Err(Stop::Failed(AppError::Capture(reason))),
+        Some(CaptureCommand::FrameFailed) => {
+            Err(Stop::Failed(AppError::Capture(FRAME_FAILED.into())))
         }
-        let remaining = WAIT_FOR_GAME.saturating_sub(env.now() - started);
-        if remaining.is_zero() {
-            return Err(Stop::Timeout);
+        Some(CaptureCommand::Select { reply, .. }) => {
+            let _ = reply.send(Err(AppError::Validation("Выбор ещё не готов".into())));
+            Ok(())
         }
-        env.emit(CaptureStatus::WaitingForGame {
-            remaining_ms: remaining.as_millis() as u64,
-        });
-        env.sleep(POLL_INTERVAL.min(remaining));
+        _ => Ok(()),
     }
 }
 
-/// The game may lose focus during the countdown; the snapshot is taken anyway.
-fn count_down(env: &impl CaptureEnv, commands: &Receiver<CaptureCommand>) -> Result<(), Stop> {
-    let started = env.now();
+fn wait_for_printscreen(commands: &Receiver<CaptureCommand>) -> Result<(), Stop> {
     loop {
-        check_cancelled(commands)?;
-        let remaining = COUNTDOWN.saturating_sub(env.now() - started);
-        if remaining.is_zero() {
-            return Ok(());
+        match commands.recv() {
+            Ok(CaptureCommand::PrintScreen) => return Ok(()),
+            Ok(CaptureCommand::PrepareFailed(reason)) => {
+                return Err(Stop::Failed(AppError::Capture(reason)))
+            }
+            Ok(CaptureCommand::Cancel | CaptureCommand::OverlayClosed) | Err(_) => {
+                return Err(Stop::Cancelled)
+            }
+            Ok(CaptureCommand::Select { reply, .. }) => {
+                let _ = reply.send(Err(AppError::Validation("Выбор ещё не готов".into())));
+            }
+            Ok(
+                CaptureCommand::Pick { .. }
+                | CaptureCommand::PrepareReady
+                | CaptureCommand::FrameReady
+                | CaptureCommand::FrameFailed,
+            ) => {}
         }
-        env.emit(CaptureStatus::Countdown {
-            remaining_ms: remaining.as_millis() as u64,
-        });
-        env.sleep(POLL_INTERVAL.min(remaining));
     }
 }
 
 fn check_cancelled(commands: &Receiver<CaptureCommand>) -> Result<(), Stop> {
     loop {
         match commands.try_recv() {
-            Ok(CaptureCommand::Cancel) | Err(TryRecvError::Disconnected) => {
-                return Err(Stop::Cancelled)
-            }
-            Ok(CaptureCommand::Pick { .. } | CaptureCommand::OverlayClosed) => {}
+            Ok(CaptureCommand::Cancel | CaptureCommand::OverlayClosed)
+            | Err(TryRecvError::Disconnected) => return Err(Stop::Cancelled),
+            Ok(
+                CaptureCommand::PrepareFailed(_)
+                | CaptureCommand::PrepareReady
+                | CaptureCommand::FrameReady
+                | CaptureCommand::FrameFailed
+                | CaptureCommand::PrintScreen
+                | CaptureCommand::Pick { .. },
+            ) => {}
             Ok(CaptureCommand::Select { reply, .. }) => {
                 let _ = reply.send(Err(AppError::Validation("Выбор ещё не готов".into())));
             }
@@ -342,13 +353,20 @@ fn pick(
     request: CaptureRequest,
     pixel_id: Uuid,
     frame: &Frame,
-    image: &RgbImage,
     commands: &Receiver<CaptureCommand>,
     env: &impl CaptureEnv,
+    editor_closed: &mut bool,
 ) -> Result<(), Stop> {
     let mut search_rect = None;
     loop {
         match commands.recv() {
+            Ok(
+                CaptureCommand::PrintScreen
+                | CaptureCommand::PrepareFailed(_)
+                | CaptureCommand::PrepareReady
+                | CaptureCommand::FrameReady
+                | CaptureCommand::FrameFailed,
+            ) => {}
             Ok(CaptureCommand::Pick { x, y }) => {
                 if request.mode != CaptureMode::Pixel {
                     continue;
@@ -356,12 +374,21 @@ fn pick(
                 let Some(color) = frame.rgb_at(x, y) else {
                     continue;
                 };
-                let mut thumbnail = screenshots::thumbnail(image);
+                env.emit(CaptureStatus::Saving);
+                env.selection_accepted(true);
+                *editor_closed = true;
+                let image = frame.to_rgb_image();
+                env.write_screenshot(
+                    &screenshots.image_path(request.profile_id, pixel_id),
+                    &image,
+                )?;
+                let mut thumbnail = screenshots::thumbnail(&image);
                 screenshots::draw_marker(&mut thumbnail, frame.width, x, y);
                 screenshots::save_png(
                     &screenshots.thumbnail_path(request.profile_id, pixel_id),
                     &thumbnail,
                 )?;
+                check_picker_cancelled(commands)?;
                 let pixel = Pixel::new(pixel_id, x, y, color);
                 profiles::add_pixel(store, request.profile_id, request.tracker_id, pixel)?;
                 return Ok(());
@@ -388,6 +415,7 @@ fn pick(
                 }
                 if stage == SelectionStage::Search {
                     search_rect = Some(rect);
+                    env.selection_accepted(false);
                     env.emit(CaptureStatus::SelectingTemplate);
                     let _ = reply.send(Ok(SelectionReply {
                         stage: "template",
@@ -396,20 +424,30 @@ fn pick(
                     continue;
                 }
                 let search = search_rect.expect("validated template stage");
-                let template =
-                    image::imageops::crop_imm(image, rect.x, rect.y, rect.width, rect.height)
-                        .to_image();
-                if !template.as_raw().iter().any(|&channel| channel != 0) {
+                // Validate just the original BGRA region before allocating a full RGB image.
+                // Alpha is ignored: Desktop Duplication may return zero or opaque alpha.
+                if !template_has_color(frame, rect) {
                     let _ = reply.send(Err(AppError::Validation("Полностью чёрный образец не позволяет вычислить сходство. Выберите другой образец".into())));
                     continue;
                 }
+                env.emit(CaptureStatus::Saving);
+                env.selection_accepted(true);
+                *editor_closed = true;
+                let image = frame.to_rgb_image();
+                let template =
+                    image::imageops::crop_imm(&image, rect.x, rect.y, rect.width, rect.height)
+                        .to_image();
                 let saved = (|| -> Result<(), Stop> {
                     profiles::profile_process_name(store, request.profile_id, request.tracker_id)?;
+                    env.write_screenshot(
+                        &screenshots.image_path(request.profile_id, pixel_id),
+                        &image,
+                    )?;
                     screenshots::save_png(
                         &screenshots.template_path(request.profile_id, pixel_id),
                         &template,
                     )?;
-                    let mut thumbnail = screenshots::thumbnail(image);
+                    let mut thumbnail = screenshots::thumbnail(&image);
                     screenshots::draw_regions(&mut thumbnail, frame.width, search, rect);
                     screenshots::save_png(
                         &screenshots.thumbnail_path(request.profile_id, pixel_id),
@@ -435,7 +473,6 @@ fn pick(
                     Err(stop) => {
                         let message = match &stop {
                             Stop::Cancelled => "Выбор отменён".into(),
-                            Stop::Timeout => "Время выбора истекло".into(),
                             Stop::Failed(error) => error.to_string(),
                         };
                         let _ = reply.send(Err(AppError::Capture(message)));
@@ -450,6 +487,18 @@ fn pick(
     }
 }
 
+fn template_has_color(frame: &Frame, rect: PhysicalRect) -> bool {
+    (rect.y..rect.y + rect.height).any(|y| {
+        let start = (y as usize * frame.width as usize + rect.x as usize) * 4;
+        let end = start + rect.width as usize * 4;
+        frame.bgra[start..end]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[0] | pixel[1] | pixel[2] != 0)
+    })
+}
+
 /// Saving may take long enough for Esc to arrive after the template selection.
 /// Drain that cancellation before the config commit makes the condition visible.
 fn check_picker_cancelled(commands: &Receiver<CaptureCommand>) -> Result<(), Stop> {
@@ -460,7 +509,14 @@ fn check_picker_cancelled(commands: &Receiver<CaptureCommand>) -> Result<(), Sto
             Ok(CaptureCommand::Select { reply, .. }) => {
                 let _ = reply.send(Err(AppError::Validation("Образец уже сохраняется".into())));
             }
-            Ok(CaptureCommand::Pick { .. }) => {}
+            Ok(
+                CaptureCommand::PrepareFailed(_)
+                | CaptureCommand::PrepareReady
+                | CaptureCommand::FrameReady
+                | CaptureCommand::FrameFailed
+                | CaptureCommand::PrintScreen
+                | CaptureCommand::Pick { .. },
+            ) => {}
             Err(TryRecvError::Empty) => return Ok(()),
         }
     }
@@ -498,13 +554,14 @@ fn validate_selection(
 /// Runs at most one capture session at a time and routes commands to it.
 #[derive(Default)]
 pub struct PixelCapture {
-    active: Arc<Mutex<Option<Sender<CaptureCommand>>>>,
+    active: Arc<Mutex<Option<(Uuid, Sender<CaptureCommand>)>>>,
 }
 
 impl PixelCapture {
     pub fn start(
         &self,
-        session: impl FnOnce(Receiver<CaptureCommand>) + Send + 'static,
+        session_id: Uuid,
+        session: impl FnOnce(Sender<CaptureCommand>, Receiver<CaptureCommand>) + Send + 'static,
     ) -> AppResult<JoinHandle<()>> {
         let mut active = lock(&self.active);
         if active.is_some() {
@@ -513,18 +570,43 @@ impl PixelCapture {
             ));
         }
         let (sender, receiver) = mpsc::channel();
-        *active = Some(sender);
+        *active = Some((session_id, sender.clone()));
 
         let release = ReleaseOnDrop(self.active.clone());
         Ok(thread::spawn(move || {
             let _release = release;
-            session(receiver);
+            session(sender, receiver);
         }))
+    }
+
+    pub fn send_for(&self, session_id: Uuid, command: CaptureCommand) -> AppResult<()> {
+        match &*lock(&self.active) {
+            Some((id, sender)) if *id == session_id => sender
+                .send(command)
+                .map_err(|_| AppError::NotFound("Захват не идёт")),
+            _ => Err(AppError::Validation("Сессия захвата устарела".into())),
+        }
+    }
+
+    pub fn send_to(&self, session_id: Uuid, command: CaptureCommand) {
+        let _ = self.send_for(session_id, command);
+    }
+
+    pub fn cancel(&self, session_id: Uuid) {
+        self.send_to(session_id, CaptureCommand::Cancel);
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.send(CaptureCommand::Cancel);
+        // Hook and pause are owned by the worker. Keep the app alive until cleanup completes.
+        while lock(&self.active).is_some() {
+            thread::sleep(Duration::from_millis(5));
+        }
     }
 
     pub fn send(&self, command: CaptureCommand) -> AppResult<()> {
         match &*lock(&self.active) {
-            Some(sender) => {
+            Some((_, sender)) => {
                 let _ = sender.send(command);
                 Ok(())
             }
@@ -534,7 +616,7 @@ impl PixelCapture {
 }
 
 /// Frees the session slot even if the session panics.
-struct ReleaseOnDrop(Arc<Mutex<Option<Sender<CaptureCommand>>>>);
+struct ReleaseOnDrop(Arc<Mutex<Option<(Uuid, Sender<CaptureCommand>)>>>);
 
 impl Drop for ReleaseOnDrop {
     fn drop(&mut self) {
@@ -556,8 +638,6 @@ mod tests {
     use image::RgbImage;
     use tempfile::TempDir;
 
-    const GAME: WindowHandle = WindowHandle(42);
-
     #[derive(Default)]
     enum Outcome {
         #[default]
@@ -569,8 +649,7 @@ mod tests {
     #[derive(Default)]
     struct FakeEnv {
         now: Mutex<Duration>,
-        /// Virtual time from which the game window is in the foreground.
-        game_active_from: Option<Duration>,
+        press_at: Option<Duration>,
         /// Sends `Cancel` once virtual time reaches this point.
         cancel_at: Mutex<Option<(Duration, Sender<CaptureCommand>)>>,
         /// What the user does once the picker is shown.
@@ -579,11 +658,15 @@ mod tests {
         prepare_ready_at: Option<Duration>,
         prepare_error: Option<String>,
         prepare_hangs: bool,
+        fails_hook: bool,
+        hook_active: Mutex<bool>,
         fails_capture: bool,
         fails_frame: bool,
+        fails_save: bool,
         black_frame: bool,
         published_id: Mutex<Option<Uuid>>,
         before_picker: Mutex<Option<Box<dyn FnOnce() + Send>>>,
+        before_save: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         prepare: Mutex<Outcome>,
         frame: Mutex<Outcome>,
         calls: Mutex<Vec<String>>,
@@ -620,7 +703,25 @@ mod tests {
             *lock(&self.now)
         }
 
-        fn sleep(&self, duration: Duration) {
+        fn wait_notification(
+            &self,
+            commands: &Receiver<CaptureCommand>,
+            duration: Duration,
+        ) -> Option<CaptureCommand> {
+            if let Ok(command) = commands.try_recv() {
+                return Some(command);
+            }
+            let next_prepare = self
+                .prepare_ready_at
+                .filter(|at| *at > self.now())
+                .map(|at| at - self.now());
+            let next_cancel = lock(&self.cancel_at)
+                .as_ref()
+                .map(|(at, _)| at.saturating_sub(self.now()));
+            let duration = next_prepare
+                .into_iter()
+                .chain(next_cancel)
+                .fold(duration, Duration::min);
             let now = {
                 let mut now = lock(&self.now);
                 *now += duration;
@@ -637,13 +738,18 @@ mod tests {
                 let (_, sender) = cancel_at.take().unwrap();
                 sender.send(CaptureCommand::Cancel).unwrap();
             }
+            commands.try_recv().ok()
         }
 
-        fn foreground_game(&self, process_name: &str) -> Option<WindowHandle> {
-            assert_eq!(process_name, "game.exe");
-            self.game_active_from
-                .filter(|from| self.now() >= *from)
-                .map(|_| GAME)
+        fn begin_wait(&self) -> AppResult<()> {
+            if self.fails_hook {
+                return Err(AppError::Capture("Hook unavailable".into()));
+            }
+            *lock(&self.hook_active) = true;
+            Ok(())
+        }
+        fn end_wait(&self) {
+            *lock(&self.hook_active) = false;
         }
 
         fn capture_frame(&self) -> AppResult<Frame> {
@@ -679,10 +785,16 @@ mod tests {
 
         fn write_screenshot(&self, path: &Path, image: &RgbImage) -> AppResult<()> {
             lock(&self.calls).push("write png".into());
+            if let Some(callback) = lock(&self.before_save).take() {
+                callback();
+            }
+            if self.fails_save {
+                return Err(AppError::Capture("Не удалось сохранить снимок".into()));
+            }
             crate::screenshots::save_stored_png(path, image)
         }
 
-        fn publish_frame(&self, _: CaptureRequest, id: Uuid) -> AppResult<()> {
+        fn publish_frame(&self, _: CaptureRequest, id: Uuid, _: &Frame) -> AppResult<()> {
             *lock(&self.published_id) = Some(id);
             lock(&self.calls).push("publish frame".into());
             *lock(&self.frame) = if self.fails_frame {
@@ -699,11 +811,6 @@ mod tests {
 
         fn hide_picker(&self) {
             lock(&self.calls).push("hide picker".into());
-        }
-
-        fn minimize_game(&self, game: WindowHandle) {
-            assert_eq!(game, GAME);
-            lock(&self.calls).push("minimize".into());
         }
 
         fn reveal_picker(&self) -> AppResult<()> {
@@ -729,6 +836,13 @@ mod tests {
 
         fn close_picker(&self) {
             lock(&self.calls).push("close picker".into());
+        }
+
+        fn selection_accepted(&self, final_selection: bool) {
+            if final_selection {
+                self.close_picker();
+            }
+            lock(&self.calls).push("selection sound".into());
         }
 
         fn emit(&self, status: CaptureStatus) {
@@ -761,6 +875,7 @@ mod tests {
                 _dir: dir,
                 store: Arc::new(store),
                 request: CaptureRequest {
+                    session_id: Uuid::new_v4(),
                     profile_id: profile.id,
                     tracker_id: tracker.id,
                     mode: CaptureMode::Pixel,
@@ -774,6 +889,13 @@ mod tests {
             sender: Sender<CaptureCommand>,
             receiver: Receiver<CaptureCommand>,
         ) {
+            if let Some((at, _)) = lock(&env.cancel_at).take() {
+                *lock(&env.now) = at;
+                sender.send(CaptureCommand::Cancel).unwrap();
+            } else {
+                *lock(&env.now) = env.press_at.unwrap_or_default();
+                sender.send(CaptureCommand::PrintScreen).unwrap();
+            }
             run_session(env, &self.store, &self.screenshots, self.request, &receiver);
             drop(sender);
         }
@@ -801,35 +923,423 @@ mod tests {
     }
 
     #[test]
-    fn times_out_when_the_game_is_never_activated() {
-        let fixture = Fixture::new();
-        let env = FakeEnv::default();
-        let (sender, receiver) = mpsc::channel();
-
-        fixture.run(&env, sender, receiver);
-
-        let statuses = env.statuses();
+    fn invalid_or_black_icon_choices_stay_open_and_only_accepted_search_plays_tick() {
+        let mut fixture = Fixture::new();
+        fixture.request.mode = CaptureMode::Icon;
+        let (sender, commands) = mpsc::channel();
+        let env = FakeEnv {
+            black_frame: true,
+            on_picker: picker_actions(
+                &[
+                    selection(rect(0, 0, 1, 1), SelectionStage::Template),
+                    selection(rect(0, 0, 0, 1), SelectionStage::Search),
+                    CaptureCommand::Select {
+                        pixel_id: Uuid::new_v4(),
+                        rect: rect(0, 0, 2, 2),
+                        stage: SelectionStage::Search,
+                        reply: mpsc::channel().0,
+                    },
+                    selection(rect(0, 0, 2, 2), SelectionStage::Search),
+                    selection(rect(2, 0, 1, 1), SelectionStage::Template),
+                    selection(rect(0, 0, 1, 1), SelectionStage::Template),
+                    CaptureCommand::Cancel,
+                ],
+                &sender,
+            ),
+            ..FakeEnv::default()
+        };
+        fixture.run(&env, sender, commands);
+        assert_eq!(env.last_status(), CaptureStatus::Cancelled);
+        assert!(env.statuses().contains(&CaptureStatus::SelectingTemplate));
+        assert!(!env.statuses().contains(&CaptureStatus::Saving));
+        let calls = env.calls();
         assert_eq!(
-            statuses[0],
-            CaptureStatus::WaitingForGame {
-                remaining_ms: 10_000
-            }
+            calls
+                .iter()
+                .filter(|call| *call == "selection sound")
+                .count(),
+            1
         );
-        assert_eq!(env.last_status(), CaptureStatus::Timeout);
-        assert_eq!(env.now(), WAIT_FOR_GAME);
-        assert!(!statuses
-            .iter()
-            .any(|s| matches!(s, CaptureStatus::Countdown { .. })));
-        assert!(!has_shutter_or_show(&env.calls()));
-        assert!(fixture.pixels().is_empty());
+        assert_eq!(
+            calls.iter().filter(|call| *call == "close picker").count(),
+            1
+        );
+        assert!(!calls.iter().any(|call| call == "write png"));
+        assert_eq!(fixture.screenshot_files(), 0);
     }
 
     #[test]
-    fn snapshots_200_ms_after_the_game_is_activated_and_adds_the_picked_pixel() {
+    fn template_black_check_uses_selected_rgb_region_and_ignores_alpha() {
+        let frame = Frame {
+            width: 3,
+            height: 1,
+            bgra: vec![0, 0, 0, 255, 1, 0, 0, 0, 0, 0, 0, 0],
+        };
+        assert!(!template_has_color(&frame, rect(0, 0, 1, 1)));
+        assert!(!template_has_color(&frame, rect(2, 0, 1, 1)));
+        assert!(template_has_color(&frame, rect(1, 0, 1, 1)));
+    }
+
+    #[test]
+    fn cancelling_accepted_pixel_during_background_save_cleans_files_without_reclosing() {
+        let fixture = Fixture::new();
+        let (sender, commands) = mpsc::channel();
+        let env = FakeEnv {
+            on_picker: picker_actions(
+                &[CaptureCommand::Pick { x: 1, y: 0 }, CaptureCommand::Cancel],
+                &sender,
+            ),
+            ..FakeEnv::default()
+        };
+        fixture.run(&env, sender, commands);
+        assert_eq!(env.last_status(), CaptureStatus::Cancelled);
+        assert!(env.statuses().contains(&CaptureStatus::Saving));
+        assert_eq!(
+            env.calls()
+                .iter()
+                .filter(|call| *call == "selection sound")
+                .count(),
+            1
+        );
+        assert_eq!(
+            env.calls()
+                .iter()
+                .filter(|call| *call == "close picker")
+                .count(),
+            1
+        );
+        assert!(fixture.pixels().is_empty());
+        assert_eq!(fixture.screenshot_files(), 0);
+    }
+
+    #[test]
+    fn final_choice_closes_and_acknowledges_before_blocked_background_save() {
+        for mode in [CaptureMode::Pixel, CaptureMode::Icon] {
+            for fail_save in [false, true] {
+                let mut fixture = Fixture::new();
+                fixture.request.mode = mode;
+                let request = fixture.request;
+                let store = fixture.store.clone();
+                let screenshots = fixture.screenshots.clone();
+                let capture = PixelCapture::default();
+                let engine = Arc::new(crate::engine::Engine::start(|_| {}));
+                let worker_engine = engine.clone();
+                let (sender, commands) = mpsc::channel();
+                sender.send(CaptureCommand::PrintScreen).unwrap();
+                let actions = match mode {
+                    CaptureMode::Pixel => vec![CaptureCommand::Pick { x: 1, y: 0 }],
+                    CaptureMode::Icon => vec![
+                        selection(rect(0, 0, 4, 2), SelectionStage::Search),
+                        selection(rect(1, 0, 1, 1), SelectionStage::Template),
+                    ],
+                };
+                let (saving, save_started) = mpsc::channel();
+                let (release, save_release) = mpsc::channel();
+                let env = Arc::new(FakeEnv {
+                    fails_save: fail_save,
+                    before_save: Mutex::new(Some(Box::new(move || {
+                        saving.send(()).unwrap();
+                        let _ = save_release.recv();
+                    }))),
+                    on_picker: picker_actions(&actions, &sender),
+                    ..FakeEnv::default()
+                });
+                let worker_env = env.clone();
+                let worker = capture
+                    .start(request.session_id, move |_, _| {
+                        let _guard = worker_engine.pause();
+                        run_session(&*worker_env, &store, &screenshots, request, &commands);
+                    })
+                    .unwrap();
+                save_started
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("accepted final selection reaches background persistence");
+                let calls = env.calls();
+                let close = calls
+                    .iter()
+                    .position(|call| call == "close picker")
+                    .expect("editor closes before saving");
+                let sound = calls
+                    .iter()
+                    .rposition(|call| call == "selection sound")
+                    .expect("accepted choice is acknowledged");
+                let save = calls.iter().position(|call| call == "write png").unwrap();
+                assert!(close < sound && sound < save);
+                assert_eq!(env.last_status(), CaptureStatus::Saving);
+                assert!(engine.is_paused());
+                assert!(capture.start(Uuid::new_v4(), |_, _| {}).is_err());
+                assert!(fixture.pixels().is_empty());
+                assert!(fixture
+                    .store
+                    .read(|config| config.profiles[0].trackers[0].icons.is_empty()));
+                release.send(()).unwrap();
+                worker.join().unwrap();
+                assert!(!engine.is_paused());
+                assert_eq!(
+                    env.calls()
+                        .iter()
+                        .filter(|call| *call == "close picker")
+                        .count(),
+                    1
+                );
+                if fail_save {
+                    assert!(matches!(env.last_status(), CaptureStatus::Failed { .. }));
+                    assert_eq!(fixture.screenshot_files(), 0);
+                } else {
+                    assert_eq!(env.last_status(), CaptureStatus::Done);
+                    assert_eq!(
+                        fixture.screenshot_files(),
+                        if mode == CaptureMode::Pixel { 2 } else { 3 }
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn delayed_pick_from_finished_session_cannot_reach_new_session() {
+        let capture = PixelCapture::default();
+        let old = Uuid::new_v4();
+        capture.start(old, |_, _| {}).unwrap().join().unwrap();
+        let current = Uuid::new_v4();
+        let worker = capture
+            .start(current, |_, commands| {
+                assert!(matches!(commands.recv(), Ok(CaptureCommand::Cancel)));
+            })
+            .unwrap();
+        assert!(capture
+            .send_for(old, CaptureCommand::Pick { x: 1, y: 1 })
+            .is_err());
+        capture.cancel(old);
+        capture.cancel(current);
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn successful_choice_is_the_first_persistent_full_frame_write() {
+        for mode in [CaptureMode::Pixel, CaptureMode::Icon] {
+            let mut fixture = Fixture::new();
+            fixture.request.mode = mode;
+            let screenshots = fixture.screenshots.clone();
+            let request = fixture.request;
+            let (sender, commands) = mpsc::channel();
+            let actions = match mode {
+                CaptureMode::Pixel => vec![CaptureCommand::Pick { x: 1, y: 0 }],
+                CaptureMode::Icon => vec![
+                    selection(rect(0, 0, 4, 2), SelectionStage::Search),
+                    selection(rect(1, 0, 1, 1), SelectionStage::Template),
+                ],
+            };
+            let env = FakeEnv {
+                before_picker: Mutex::new(Some(Box::new(move || {
+                    assert!(
+                        !screenshots.profile_dir(request.profile_id).exists(),
+                        "editor reveal must not depend on disk screenshot IO"
+                    );
+                }))),
+                on_picker: picker_actions(&actions, &sender),
+                ..FakeEnv::default()
+            };
+            fixture.run(&env, sender, commands);
+            assert_eq!(env.last_status(), CaptureStatus::Done);
+            let calls = env.calls();
+            assert!(
+                calls.iter().position(|c| c == "write png").unwrap()
+                    > calls.iter().position(|c| c == "show picker").unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn full_frame_persistence_failure_does_not_commit_pixel_or_icon() {
+        for mode in [CaptureMode::Pixel, CaptureMode::Icon] {
+            let mut fixture = Fixture::new();
+            fixture.request.mode = mode;
+            let (sender, commands) = mpsc::channel();
+            let actions = match mode {
+                CaptureMode::Pixel => vec![CaptureCommand::Pick { x: 0, y: 0 }],
+                CaptureMode::Icon => vec![
+                    selection(rect(0, 0, 4, 2), SelectionStage::Search),
+                    selection(rect(1, 0, 1, 1), SelectionStage::Template),
+                ],
+            };
+            let env = FakeEnv {
+                fails_save: true,
+                on_picker: picker_actions(&actions, &sender),
+                ..FakeEnv::default()
+            };
+            fixture.run(&env, sender, commands);
+            assert!(matches!(env.last_status(), CaptureStatus::Failed { .. }));
+            assert_eq!(fixture.screenshot_files(), 0);
+            assert!(fixture.pixels().is_empty());
+            assert!(fixture
+                .store
+                .read(|config| config.profiles[0].trackers[0].icons.is_empty()));
+        }
+    }
+
+    #[test]
+    fn shutdown_keeps_slot_reserved_until_worker_cleanup_finishes() {
+        let capture = Arc::new(PixelCapture::default());
+        let (cleaning, cleanup_started) = mpsc::channel();
+        let (release, cleanup_release) = mpsc::channel();
+        let worker = capture
+            .start(Uuid::new_v4(), move |_, commands| {
+                assert!(matches!(commands.recv(), Ok(CaptureCommand::Cancel)));
+                cleaning.send(()).unwrap();
+                cleanup_release.recv().unwrap();
+            })
+            .unwrap();
+        let shutdown_capture = capture.clone();
+        let (finished, shutdown_finished) = mpsc::channel();
+        let shutdown = thread::spawn(move || {
+            shutdown_capture.shutdown();
+            finished.send(()).unwrap();
+        });
+        cleanup_started.recv().unwrap();
+        assert!(shutdown_finished.try_recv().is_err());
+        assert!(capture.start(Uuid::new_v4(), |_, _| {}).is_err());
+        release.send(()).unwrap();
+        shutdown.join().unwrap();
+        worker.join().unwrap();
+        shutdown_finished.recv().unwrap();
+        capture
+            .start(Uuid::new_v4(), |_, _| {})
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn every_terminal_outcome_releases_hook_pause_and_session_slot() {
+        for case in 0..12 {
+            let outcome = case % 6;
+            let user_paused = case >= 6;
+            let engine = Arc::new(crate::engine::Engine::start(|_| {}));
+            if user_paused {
+                assert!(engine.toggle_user_pause());
+            }
+            let worker_engine = engine.clone();
+            let fixture = Fixture::new();
+            let capture = PixelCapture::default();
+            let (sender, receiver) = mpsc::channel();
+            sender
+                .send(if outcome == 0 {
+                    CaptureCommand::Cancel
+                } else {
+                    CaptureCommand::PrintScreen
+                })
+                .unwrap();
+            let env = Arc::new(FakeEnv {
+                fails_hook: outcome == 1,
+                fails_capture: outcome == 2,
+                prepare_error: (outcome == 3).then(|| PREPARE_FAILED.into()),
+                fails_frame: outcome == 4,
+                on_picker: picker_actions(&[CaptureCommand::Pick { x: 0, y: 0 }], &sender),
+                ..FakeEnv::default()
+            });
+            let worker_env = env.clone();
+            let store = fixture.store.clone();
+            let screenshots = fixture.screenshots.clone();
+            let request = fixture.request;
+            let worker = capture
+                .start(request.session_id, move |_, _| {
+                    let _guard = worker_engine.pause();
+                    assert!(worker_engine.is_paused());
+                    run_session(&*worker_env, &store, &screenshots, request, &receiver);
+                    assert!(!*lock(&worker_env.hook_active));
+                    assert!(
+                        worker_engine.is_paused(),
+                        "pause lasts through terminal cleanup"
+                    );
+                })
+                .unwrap();
+            worker.join().unwrap();
+            assert_eq!(engine.is_paused(), user_paused);
+            assert!(
+                fixture
+                    .store
+                    .read(|config| config.profiles[0].trackers.iter().all(|t| !t.is_running)),
+                "capture must preserve stopped trackers"
+            );
+            assert!(!*lock(&env.hook_active));
+            capture
+                .start(Uuid::new_v4(), |_, _| {})
+                .unwrap()
+                .join()
+                .unwrap();
+            if outcome != 5 {
+                assert_eq!(fixture.screenshot_files(), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn preparation_failure_ends_waiting_without_a_printscreen() {
+        let fixture = Fixture::new();
+        let (sender, commands) = mpsc::channel();
+        let store = fixture.store.clone();
+        let screenshots = fixture.screenshots.clone();
+        let request = fixture.request;
+        let env = Arc::new(FakeEnv::default());
+        let worker_env = env.clone();
+        let worker = thread::spawn(move || {
+            run_session(&*worker_env, &store, &screenshots, request, &commands)
+        });
+        while !env
+            .statuses()
+            .contains(&CaptureStatus::WaitingForPrintScreen)
+        {
+            thread::yield_now();
+        }
+        sender
+            .send(CaptureCommand::PrepareFailed(PREPARE_FAILED.into()))
+            .unwrap();
+        worker.join().unwrap();
+        assert!(matches!(env.last_status(), CaptureStatus::Failed { .. }));
+        assert!(!env.calls().iter().any(|c| c.starts_with("capture at")));
+        assert!(!*lock(&env.hook_active));
+    }
+
+    #[test]
+    fn waits_indefinitely_until_printscreen_without_capturing() {
+        let fixture = Fixture::new();
+        let capture = PixelCapture::default();
+        let env = Arc::new(FakeEnv::default());
+        let (ready, waiting) = mpsc::channel();
+        let request = fixture.request;
+        let store = fixture.store.clone();
+        let screenshots = fixture.screenshots.clone();
+        let worker_env = env.clone();
+        let worker = capture
+            .start(request.session_id, move |_, commands| {
+                ready.send(()).unwrap();
+                run_session(&*worker_env, &store, &screenshots, request, &commands);
+            })
+            .unwrap();
+        waiting.recv().unwrap();
+        while !env
+            .statuses()
+            .contains(&CaptureStatus::WaitingForPrintScreen)
+        {
+            thread::yield_now();
+        }
+        *lock(&env.now) = Duration::from_secs(60);
+        assert!(!env.calls().iter().any(|c| c.starts_with("capture at")));
+        capture.cancel(Uuid::new_v4());
+        assert!(capture.start(Uuid::new_v4(), |_, _| {}).is_err());
+        capture.cancel(request.session_id);
+        worker.join().unwrap();
+        assert_eq!(env.last_status(), CaptureStatus::Cancelled);
+        assert_eq!(fixture.screenshot_files(), 0);
+    }
+
+    #[test]
+    fn printscreen_outside_game_captures_immediately_and_adds_the_picked_pixel() {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::from_millis(2_500)),
+            press_at: Some(Duration::from_millis(2_500)),
             on_picker: picker_actions(&[CaptureCommand::Pick { x: 1, y: 1 }], &sender),
             ..FakeEnv::default()
         };
@@ -840,20 +1350,21 @@ mod tests {
             env.calls(),
             [
                 "prepare",
-                "capture at 2700ms",
-                "write png",
+                "capture at 2500ms",
                 "publish frame",
-                "minimize",
                 "shutter",
                 "show picker",
                 "close picker",
+                "selection sound",
+                "write png",
+                "hide picker",
             ]
         );
         let statuses = env.statuses();
-        assert!(statuses.contains(&CaptureStatus::Countdown { remaining_ms: 200 }));
+        assert!(statuses.contains(&CaptureStatus::Capturing));
         assert_eq!(
             statuses[statuses.len() - 2..],
-            [CaptureStatus::Picking, CaptureStatus::Done]
+            [CaptureStatus::Saving, CaptureStatus::Done]
         );
 
         let pixels = fixture.pixels();
@@ -885,7 +1396,7 @@ mod tests {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             on_picker: picker_actions(
                 &[
                     CaptureCommand::Pick { x: 4, y: 0 },
@@ -900,14 +1411,28 @@ mod tests {
 
         assert_eq!(env.last_status(), CaptureStatus::Done);
         assert_eq!((fixture.pixels()[0].x, fixture.pixels()[0].y), (0, 0));
+        assert_eq!(
+            env.calls()
+                .iter()
+                .filter(|call| *call == "selection sound")
+                .count(),
+            1
+        );
+        assert_eq!(
+            env.calls()
+                .iter()
+                .filter(|call| *call == "close picker")
+                .count(),
+            1
+        );
     }
 
     #[test]
-    fn user_cancel_during_countdown_takes_no_snapshot() {
+    fn user_cancel_before_printscreen_takes_no_snapshot() {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::from_secs(1)),
+            press_at: Some(Duration::from_secs(1)),
             cancel_at: Mutex::new(Some((Duration::from_millis(1_100), sender.clone()))),
             ..FakeEnv::default()
         };
@@ -925,7 +1450,7 @@ mod tests {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             on_picker: picker_actions(&[CaptureCommand::Cancel], &sender),
             ..FakeEnv::default()
         };
@@ -936,17 +1461,17 @@ mod tests {
         let calls = env.calls();
         let shutter = calls.iter().position(|call| call == "shutter").unwrap();
         assert_eq!(calls[shutter + 1], "show picker");
-        assert!(calls[..shutter].iter().any(|call| call == "write png"));
+        assert!(!calls.iter().any(|call| call == "write png"));
         assert!(fixture.pixels().is_empty());
         assert_eq!(fixture.screenshot_files(), 0);
     }
 
     #[test]
-    fn closing_the_overlay_while_waiting_does_not_cancel() {
+    fn closing_the_hidden_overlay_cancels_without_capturing() {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             on_picker: picker_actions(&[CaptureCommand::Pick { x: 0, y: 0 }], &sender),
             ..FakeEnv::default()
         };
@@ -954,7 +1479,11 @@ mod tests {
 
         fixture.run(&env, sender, receiver);
 
-        assert_eq!(env.last_status(), CaptureStatus::Done);
+        assert_eq!(env.last_status(), CaptureStatus::Cancelled);
+        assert!(!env
+            .calls()
+            .iter()
+            .any(|call| call.starts_with("capture at")));
     }
 
     #[test]
@@ -962,7 +1491,7 @@ mod tests {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             fails_capture: true,
             ..FakeEnv::default()
         };
@@ -985,7 +1514,7 @@ mod tests {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             prepare_error: Some(PREPARE_FAILED.into()),
             ..FakeEnv::default()
         };
@@ -1011,7 +1540,7 @@ mod tests {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             prepare_hangs: true,
             ..FakeEnv::default()
         };
@@ -1030,11 +1559,11 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_waits_for_prepare_that_is_still_running_after_the_countdown() {
+    fn snapshot_precedes_cold_prepare_completion() {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             prepare_ready_at: Some(Duration::from_secs(5)),
             on_picker: picker_actions(&[CaptureCommand::Pick { x: 0, y: 0 }], &sender),
             ..FakeEnv::default()
@@ -1042,19 +1571,19 @@ mod tests {
 
         fixture.run(&env, sender, receiver);
 
-        assert!(env.calls().contains(&"capture at 5000ms".to_string()));
+        assert!(env.calls().contains(&"capture at 0ms".to_string()));
         let calls = env.calls();
         let shutter = calls.iter().position(|call| call == "shutter").unwrap();
         assert_eq!(calls[shutter + 1], "show picker");
-        assert!(calls.iter().position(|call| call == "write png").unwrap() < shutter);
+        assert!(calls.iter().position(|call| call == "write png").unwrap() > shutter);
     }
 
     #[test]
-    fn prepare_that_finishes_during_the_countdown_does_not_delay_the_snapshot() {
+    fn prepare_does_not_delay_the_snapshot() {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             prepare_ready_at: Some(Duration::from_millis(100)),
             on_picker: picker_actions(&[CaptureCommand::Pick { x: 0, y: 0 }], &sender),
             ..FakeEnv::default()
@@ -1062,7 +1591,7 @@ mod tests {
 
         fixture.run(&env, sender, receiver);
 
-        assert!(env.calls().contains(&"capture at 200ms".to_string()));
+        assert!(env.calls().contains(&"capture at 0ms".to_string()));
         assert_eq!(env.last_status(), CaptureStatus::Done);
     }
 
@@ -1071,7 +1600,7 @@ mod tests {
         let fixture = Fixture::new();
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             fails_frame: true,
             ..FakeEnv::default()
         };
@@ -1085,7 +1614,7 @@ mod tests {
             }
         );
         let calls = env.calls();
-        assert!(calls.iter().any(|call| call == "write png"));
+        assert!(!calls.iter().any(|call| call == "write png"));
         assert!(calls.iter().any(|call| call == "hide picker"));
         assert!(!has_shutter_or_show(&calls));
         assert_eq!(fixture.screenshot_files(), 0);
@@ -1103,7 +1632,7 @@ mod tests {
         fixture.request.mode = CaptureMode::Icon;
         let capture = PixelCapture::default();
         let env = Arc::new(FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             ..FakeEnv::default()
         });
 
@@ -1114,17 +1643,20 @@ mod tests {
                 fixture.screenshots.clone(),
                 fixture.request,
             );
-            move |commands: Receiver<CaptureCommand>| {
+            move |_: Sender<CaptureCommand>, commands: Receiver<CaptureCommand>| {
                 run_session(&*env, &store, &screenshots, request, &commands)
             }
         };
-        let first = capture.start(session).unwrap();
-        while !env.statuses().contains(&CaptureStatus::SelectingSearch) {
+        let first = capture.start(fixture.request.session_id, session).unwrap();
+        while !env
+            .statuses()
+            .contains(&CaptureStatus::WaitingForPrintScreen)
+        {
             thread::sleep(Duration::from_millis(5));
         }
 
         assert!(matches!(
-            capture.start(|_| {}),
+            capture.start(Uuid::new_v4(), |_, _| {}),
             Err(AppError::Validation(_))
         ));
 
@@ -1133,7 +1665,7 @@ mod tests {
         assert_eq!(env.last_status(), CaptureStatus::Cancelled);
         assert!(capture.send(CaptureCommand::Cancel).is_err());
 
-        let second = capture.start(|_| {}).unwrap();
+        let second = capture.start(Uuid::new_v4(), |_, _| {}).unwrap();
         second.join().unwrap();
     }
 
@@ -1142,14 +1674,8 @@ mod tests {
         let json = |status| serde_json::to_value(status).unwrap();
 
         assert_eq!(
-            json(CaptureStatus::WaitingForGame {
-                remaining_ms: 9_900
-            }),
-            serde_json::json!({ "phase": "waitingForGame", "remainingMs": 9_900 })
-        );
-        assert_eq!(
-            json(CaptureStatus::Timeout),
-            serde_json::json!({ "phase": "timeout" })
+            json(CaptureStatus::WaitingForPrintScreen),
+            serde_json::json!({ "phase": "waitingForPrintScreen" })
         );
         assert_eq!(
             json(CaptureStatus::Failed { reason: "x".into() }),
@@ -1181,10 +1707,11 @@ mod tests {
         fixture.request.mode = CaptureMode::Icon;
         let (sender, receiver) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             on_picker: picker_actions(
                 &[
                     selection(rect(0, 0, 4, 2), SelectionStage::Search),
+                    CaptureCommand::PrintScreen,
                     selection(rect(1, 0, 1, 2), SelectionStage::Template),
                 ],
                 &sender,
@@ -1201,7 +1728,7 @@ mod tests {
                 .count(),
             1
         );
-        assert!(env.calls().contains(&"capture at 200ms".into()));
+        assert!(env.calls().contains(&"capture at 0ms".into()));
         let icons = fixture
             .store
             .read(|c| c.profiles[0].trackers[0].icons.clone());
@@ -1252,7 +1779,7 @@ mod tests {
             }
             commands.push(CaptureCommand::Cancel);
             let env = FakeEnv {
-                game_active_from: Some(Duration::ZERO),
+                press_at: Some(Duration::ZERO),
                 black_frame: black,
                 on_picker: picker_actions(&commands, &sender),
                 ..FakeEnv::default()
@@ -1373,9 +1900,9 @@ mod tests {
             request,
             id,
             &frame,
-            &image,
             &receiver,
-            &FakeEnv::default()
+            &FakeEnv::default(),
+            &mut false
         )
         .is_err());
         assert!(replies.recv().unwrap().is_ok());
@@ -1409,7 +1936,7 @@ mod tests {
             };
             let (sender, receiver) = mpsc::channel();
             let env = FakeEnv {
-                game_active_from: Some(Duration::ZERO),
+                press_at: Some(Duration::ZERO),
                 before_picker: Mutex::new(Some(Box::new(callback))),
                 on_picker: picker_actions(
                     &[
@@ -1437,7 +1964,7 @@ mod tests {
         let (sender, receiver) = mpsc::channel();
         let (reply, replies) = mpsc::channel();
         let env = FakeEnv {
-            game_active_from: Some(Duration::ZERO),
+            press_at: Some(Duration::ZERO),
             on_picker: picker_actions(
                 &[
                     CaptureCommand::Select {

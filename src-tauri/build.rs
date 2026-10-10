@@ -31,9 +31,9 @@ fn copy_native_runtime() {
                 let destination = directory.join(name);
                 // Windows locks loaded DLLs. Leave an identical runtime in place
                 // so rebuilding while the development app runs remains possible.
-                let unchanged = std::fs::read(&destination)
-                    .ok()
-                    .is_some_and(|bytes| bytes == std::fs::read(&path).expect("read native runtime DLL"));
+                let unchanged = std::fs::read(&destination).ok().is_some_and(|bytes| {
+                    bytes == std::fs::read(&path).expect("read native runtime DLL")
+                });
                 if !unchanged {
                     std::fs::copy(&path, destination).expect("copy native runtime DLL");
                 }

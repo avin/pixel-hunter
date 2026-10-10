@@ -8,11 +8,10 @@ import {
   usePixelCaptureCancelMutation,
   usePixelCapturePickMutation,
   useIconCaptureSelectMutation,
-  useScreenshotsDirQuery,
 } from "@/store/api";
 import type { PhysicalRect, PickerFrame } from "@/store/types";
 import { type Point, type Size, toPhysicalPoint, toPhysicalRect } from "../physicalPoint";
-import { Screenshot } from "../Screenshot/Screenshot";
+import { PickerCanvas } from "./PickerCanvas/PickerCanvas";
 import { CursorHint } from "../CursorHint/CursorHint";
 import { RegionMarker } from "../RegionMarker/RegionMarker";
 
@@ -20,30 +19,33 @@ const FRAME_EVENT = "screen-overlay://frame";
 const CLEAR_EVENT = "screen-overlay://clear";
 
 export function ScreenshotPicker() {
-  const { data: dir } = useScreenshotsDirQuery();
   const [ready] = usePickerReadyMutation();
   const [getFrame] = useLazyPickerFrameQuery();
   const [frame, setFrame] = useState<PickerFrame>();
+  const frameRevision = useRef(0);
   const [cancel] = usePixelCaptureCancelMutation();
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        void cancel();
+      if (event.key === "Escape" && frame) {
+        frameRevision.current += 1;
+        setFrame(undefined);
+        void cancel({ sessionId: frame.sessionId });
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [cancel]);
+  }, [cancel, frame]);
 
   useEffect(() => {
-    if (!dir) return;
     let isActive = true;
     const unlisten = Promise.all([
       listen<PickerFrame>(FRAME_EVENT, ({ payload }) => {
+        frameRevision.current += 1;
         if (isActive) setFrame(payload);
       }),
       listen(CLEAR_EVENT, () => {
+        frameRevision.current += 1;
         if (isActive) setFrame(undefined);
       }),
     ]).then(([stopFrame, stopClear]) => () => {
@@ -56,16 +58,17 @@ export function ScreenshotPicker() {
         return;
       }
       await ready();
+      const requestRevision = frameRevision.current;
       const result = await getFrame();
-      if (isActive && result.data) setFrame(result.data);
+      if (isActive && requestRevision === frameRevision.current && result.data) setFrame(result.data);
     });
     return () => {
       isActive = false;
       void unlisten.then((stop) => stop());
     };
-  }, [dir, getFrame, ready]);
+  }, [getFrame, ready]);
 
-  return <PickerShot key={frame?.pixelId ?? "empty"} frame={frame} />;
+  return <PickerShot key={frame ? `${frame.sessionId}/${frame.pixelId}` : "empty"} frame={frame} />;
 }
 
 interface Props {
@@ -103,7 +106,7 @@ function PickerShot({ frame }: Props) {
         setCursor(point);
         if (!isIcon) {
           picked.current = true;
-          void pick(toPhysicalPoint(point.x, point.y, window.devicePixelRatio, size));
+          void pick({ ...toPhysicalPoint(point.x, point.y, window.devicePixelRatio, size), sessionId: frame.sessionId });
           return;
         }
         setError(undefined);
@@ -133,13 +136,13 @@ function PickerShot({ frame }: Props) {
           picked.current = true;
         }
       }}>
-      {frame && <Screenshot profileId={frame.profileId} pixelId={frame.pixelId} onLoad={setSize} onReady={() => void drawn(frame)} onError={() => void failed(frame)}>
+      {frame && <PickerCanvas frame={frame} onLoad={setSize} onReady={() => void drawn(frame)} onError={() => void failed(frame)}>
         {(imageSize) => <>
           {searchRect && <RegionMarker rect={searchRect} size={imageSize} kind="search" />}
           {selection && <RegionMarker rect={selection} size={imageSize} kind={stage === "search" ? "search" : "template"} />}
         </>}
-      </Screenshot>}
-      {frame && <CursorHint cursor={cursor} text={isSaving ? "сохраняем выделение" : hint} />}
+      </PickerCanvas>}
+      {frame && <CursorHint cursor={cursor} text={hint} />}
       {error && <p role="alert" className="pointer-events-none absolute bottom-4 left-4 max-w-full bg-gray-200 px-3 py-2 text-black">{error}</p>}
     </div>
   );

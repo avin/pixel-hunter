@@ -67,6 +67,9 @@ struct PauseControl {
     /// Serializes updates so one pause cannot publish over the other's newer value.
     lock: Mutex<()>,
     signal: Arc<AtomicBool>,
+    /// Capture start waits for ongoing input to release all held keys.
+    action: Mutex<()>,
+    polling: Arc<Mutex<()>>,
 }
 
 impl PauseControl {
@@ -76,6 +79,8 @@ impl PauseControl {
             user: AtomicBool::new(false),
             lock: Mutex::new(()),
             signal: Arc::new(AtomicBool::new(false)),
+            action: Mutex::new(()),
+            polling: Arc::new(Mutex::new(())),
         }
     }
 
@@ -117,6 +122,7 @@ pub struct Engine {
     commands: Sender<Command>,
     activation: Mutex<Activation>,
     pause: Arc<PauseControl>,
+    gate: Arc<ShortcutGate>,
 }
 
 impl Engine {
@@ -167,21 +173,30 @@ impl Engine {
         let done = commands.clone();
         let (executor_cancelled, executor_paused) = (cancelled.clone(), pause.signal.clone());
         let playback_gate = Arc::clone(&gate);
+        let playback_pause = Arc::clone(&pause);
         thread::spawn(move || {
             executor::run(
                 job_receiver,
                 &executor_cancelled,
                 &executor_paused,
                 |job| {
+                    let _action = playback_pause
+                        .action
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner);
+                    if playback_pause.capture.load(Ordering::SeqCst) {
+                        return;
+                    }
                     play_action(
                         job,
                         |sound| audio.play_runtime(sound),
                         |job| {
-                            perform_action(
+                            perform_action_until(
                                 &job.action,
                                 &job.process_name,
                                 &playback_gate,
                                 muted.as_ref(),
+                                &|| playback_pause.capture.load(Ordering::SeqCst),
                             )
                         },
                     );
@@ -198,6 +213,7 @@ impl Engine {
             jobs,
             cancelled,
             paused: pause.signal.clone(),
+            polling: pause.polling.clone(),
             emit,
             emit_icon,
             screenshot_root,
@@ -215,6 +231,7 @@ impl Engine {
                     epoch: 0,
                 }),
                 pause,
+                gate: gate.clone(),
             },
             hotkeys.link,
             gate,
@@ -277,9 +294,21 @@ impl Engine {
         }
     }
 
-    /// Suspends polling and new actions until the guard is dropped. Does not clear a user pause.
+    /// Suspends polling and interrupts input, waiting for held keys to be released.
+    /// Does not clear a user pause.
     pub fn pause(&self) -> PauseGuard {
         self.pause.set_capture(true);
+        let _action = self
+            .pause
+            .action
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _polling = self
+            .pause
+            .polling
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        self.gate.sync(&[]);
         PauseGuard(self.pause.clone())
     }
 
@@ -291,6 +320,11 @@ impl Engine {
     #[cfg(test)]
     fn is_user_paused(&self) -> bool {
         self.pause.user.load(Ordering::SeqCst)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_paused(&self) -> bool {
+        self.pause.signal.load(Ordering::SeqCst)
     }
 
     fn send(&self, command: Command) {
@@ -313,10 +347,20 @@ pub(crate) fn perform_action(
     gate: &ShortcutGate,
     muted: &dyn ShortcutMute,
 ) -> AppResult<()> {
+    perform_action_until(action, process_name, gate, muted, &|| false)
+}
+
+fn perform_action_until(
+    action: &Action,
+    process_name: &str,
+    gate: &ShortcutGate,
+    muted: &dyn ShortcutMute,
+    interrupted: &dyn Fn() -> bool,
+) -> AppResult<()> {
     match &action.kind {
-        ActionKind::KeySequence(sequence) => {
-            with_hotkeys_lifted(gate, muted, || keyboard::run_action(sequence))
-        }
+        ActionKind::KeySequence(sequence) => with_hotkeys_lifted(gate, muted, || {
+            keyboard::run_action_until(sequence, interrupted)
+        }),
         ActionKind::NetworkDisconnect => {
             network::disconnect(process_name);
             Ok(())
@@ -388,6 +432,10 @@ mod tests {
                 epoch: 0,
             }),
             pause: Arc::new(PauseControl::new()),
+            gate: Arc::new(ShortcutGate::new(
+                Box::new(NoopShortcuts),
+                Arc::new(Mutex::new(Default::default())),
+            )),
         };
         (engine, receiver)
     }
@@ -551,6 +599,55 @@ mod tests {
 
         drop(guard);
         assert!(!engine.pause.signal.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn capture_pause_waits_for_current_input_cleanup() {
+        let (engine, _) = engine();
+        let control = engine.pause.clone();
+        let (started, ready) = mpsc::channel();
+        let (cleaned, cleanup) = mpsc::channel();
+        let input = thread::spawn(move || {
+            let _action = control.action.lock().unwrap();
+            started.send(()).unwrap();
+            while !control.capture.load(Ordering::SeqCst) {
+                thread::yield_now();
+            }
+            cleaned.send(()).unwrap();
+        });
+        ready.recv().unwrap();
+        let guard = engine.pause();
+        cleanup
+            .try_recv()
+            .expect("input released keys before pause returned");
+        input.join().unwrap();
+        assert!(engine.pause.signal.load(Ordering::SeqCst));
+        drop(guard);
+        assert!(!engine.pause.signal.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn capture_pause_waits_for_in_flight_poll() {
+        let (engine, _) = engine();
+        let control = engine.pause.clone();
+        let (started, ready) = mpsc::channel();
+        let (finished, completion) = mpsc::channel();
+        let poll = thread::spawn(move || {
+            let _poll = control.polling.lock().unwrap();
+            started.send(()).unwrap();
+            while !control.capture.load(Ordering::SeqCst) {
+                thread::yield_now();
+            }
+            finished.send(()).unwrap();
+        });
+        ready.recv().unwrap();
+        let guard = engine.pause();
+        completion
+            .try_recv()
+            .expect("in-flight poll finished before pause returned");
+        poll.join().unwrap();
+        assert!(engine.pause.signal.load(Ordering::SeqCst));
+        drop(guard);
     }
 
     #[test]

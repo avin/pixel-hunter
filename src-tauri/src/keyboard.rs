@@ -69,13 +69,17 @@ impl Drop for TimerResolution {
     }
 }
 
-/// Blocks the calling thread until the key sequence has been played.
-pub fn run_action(sequence: &KeySequenceAction) -> AppResult<()> {
+/// Blocks until the sequence completes or capture pause interrupts it.
+pub fn run_action_until(
+    sequence: &KeySequenceAction,
+    interrupted: &dyn Fn() -> bool,
+) -> AppResult<()> {
     let _resolution = TimerResolution::begin();
-    key_sequence::execute_key_sequence(
+    key_sequence::execute_key_sequence_until(
         sequence,
         &mut SendInputSink,
         &ThreadSleeper,
         &mut rand::rng(),
+        interrupted,
     )
 }

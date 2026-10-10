@@ -281,7 +281,7 @@ export const tauriApi = createApi({
       query: (args) => ({ command: "icon_delete", args }),
       invalidatesTags: (_result, _error, { profileId }) => [{ type: "Profile", id: profileId }],
     }),
-    iconCaptureStart: builder.mutation<void, { profileId: string; trackerId: string }>({
+    iconCaptureStart: builder.mutation<void, { profileId: string; trackerId: string; sessionId: string }>({
       query: (args) => ({ command: "icon_capture_start", args }),
     }),
     iconCaptureSelect: builder.mutation<IconSelection, { pixelId: string; rect: PhysicalRect; stage: "search" | "template" }>({
@@ -301,18 +301,18 @@ export const tauriApi = createApi({
     }),
     pixelCaptureStart: builder.mutation<
       void,
-      { profileId: string; trackerId: string }
+      { profileId: string; trackerId: string; sessionId: string }
     >({
-      query: ({ profileId, trackerId }) => ({
+      query: (args) => ({
         command: "pixel_capture_start",
-        args: { profileId, trackerId },
+        args,
       }),
     }),
-    pixelCaptureCancel: builder.mutation<void, void>({
-      query: () => ({ command: "pixel_capture_cancel" }),
+    pixelCaptureCancel: builder.mutation<void, { sessionId: string }>({
+      query: (args) => ({ command: "pixel_capture_cancel", args }),
     }),
-    pixelCapturePick: builder.mutation<void, { x: number; y: number }>({
-      query: ({ x, y }) => ({ command: "pixel_capture_pick", args: { x, y } }),
+    pixelCapturePick: builder.mutation<void, { sessionId: string; x: number; y: number }>({
+      query: (args) => ({ command: "pixel_capture_pick", args }),
     }),
     pixelViewOpen: builder.mutation<void, PixelArgs & { origin: { x: number; y: number } }>({
       query: ({ profileId, trackerId, pixelId, origin }) => ({
@@ -344,16 +344,22 @@ export const tauriApi = createApi({
       query: () => ({ command: "picker_frame" }),
       keepUnusedDataFor: 0,
     }),
+    pickerPixels: builder.mutation<ArrayBuffer, PickerFrame>({
+      query: ({ sessionId, profileId, pixelId }) => ({
+        command: "picker_pixels",
+        args: { sessionId, profileId, pixelId },
+      }),
+    }),
     pickerFrameDrawn: builder.mutation<void, PickerFrame>({
-      query: ({ profileId, pixelId }) => ({
+      query: ({ profileId, pixelId, sessionId }) => ({
         command: "picker_frame_drawn",
-        args: { profileId, pixelId },
+        args: { profileId, pixelId, sessionId },
       }),
     }),
     pickerFrameFailed: builder.mutation<void, PickerFrame>({
-      query: ({ profileId, pixelId }) => ({
+      query: ({ profileId, pixelId, sessionId }) => ({
         command: "picker_frame_failed",
-        args: { profileId, pixelId },
+        args: { profileId, pixelId, sessionId },
       }),
     }),
     listWindowedProcesses: builder.query<WindowedProcess[], void>({
@@ -408,6 +414,7 @@ export const {
   useScreenshotsDirQuery,
   usePickerReadyMutation,
   useLazyPickerFrameQuery,
+  usePickerPixelsMutation,
   usePickerFrameDrawnMutation,
   usePickerFrameFailedMutation,
   useListWindowedProcessesQuery,

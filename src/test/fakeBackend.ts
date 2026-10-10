@@ -1,8 +1,10 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
+import { emit } from "@tauri-apps/api/event";
 import { actionIsEmpty } from "@/store/types";
 import { delayRangeError } from "@/lib/delayRange";
 import type {
   Action,
+  CaptureStatus,
   Icon,
   IconInput,
   PhysicalRect,
@@ -86,10 +88,15 @@ export function createFakeBackend({
     viewerVisible: false,
     pickerFrame: null as PickerFrame | null,
     pickerVisible: false,
+    pickerSize: { width: 1920, height: 1080 },
+    pickerPixels: undefined as ArrayBuffer | undefined,
+    pickedPoints: [] as { sessionId: string; x: number; y: number }[],
+    captureStatus: null as CaptureStatus | null,
   };
   const failures = new Map<string, string>();
   const pending = new Map<string, Promise<void>>();
   const calls: { command: string; args: Args }[] = [];
+  const cancelledSessions = new Set<string>();
   let lastId = 0;
   const nextId = () => `generated-${++lastId}`;
 
@@ -135,6 +142,15 @@ export function createFakeBackend({
     if (!pixel) throw new Error(`Unknown pixel ${String(args.pixelId)}`);
     return pixel;
   };
+
+  function beginSaving() {
+    if (!state.captureStatus) return;
+    state.captureStatus = { ...state.captureStatus, phase: "saving" };
+    state.pickerVisible = false;
+    state.pickerFrame = null;
+    void emit("pixel-capture://status", state.captureStatus);
+    void emit("screen-overlay://clear");
+  }
 
   function handle(command: string, args: Args): unknown {
     switch (command) {
@@ -304,6 +320,12 @@ export function createFakeBackend({
       case "icon_capture_select": {
         const rect = args.rect as PhysicalRect;
         if (rect.width <= 0 || rect.height <= 0) throw new Error("Выделите область перетаскиванием");
+        if (state.captureStatus?.mode === "icon" && state.pickerFrame?.pixelId === args.pixelId) {
+          if (args.stage === "search" && state.captureStatus.phase === "selectingSearch") {
+            state.captureStatus = { ...state.captureStatus, phase: "selectingTemplate" };
+            void emit("pixel-capture://status", state.captureStatus);
+          } else if (args.stage === "template" && state.captureStatus.phase === "selectingTemplate") beginSaving();
+        }
         return args.stage === "search" ? { stage: "template", searchRect: rect } : { stage: "done" };
       }
       case "icon_view_open":
@@ -319,9 +341,27 @@ export function createFakeBackend({
       case "pixel_capture_start":
       case "icon_capture_start":
         findTracker(args.profileId, args.trackerId);
+        if (cancelledSessions.has(args.sessionId as string)) return null;
+        if (state.captureStatus) throw new Error("Захват уже идёт");
+        state.captureStatus = { profileId: args.profileId as string, trackerId: args.trackerId as string, sessionId: args.sessionId as string, mode: command === "pixel_capture_start" ? "pixel" : "icon", phase: "waitingForPrintScreen" };
+        void emit("pixel-capture://status", state.captureStatus);
         return null;
       case "pixel_capture_cancel":
+        if (args.sessionId) cancelledSessions.add(args.sessionId as string);
+        if (state.captureStatus && args.sessionId === state.captureStatus.sessionId) {
+          void emit("pixel-capture://status", { ...state.captureStatus, phase: "cancelled" });
+          state.captureStatus = null;
+        } else if (args.sessionId) {
+          const start = calls.find((call) => (call.command === "pixel_capture_start" || call.command === "icon_capture_start") && call.args.sessionId === args.sessionId);
+          if (start) void emit("pixel-capture://status", { ...start.args, mode: start.command === "pixel_capture_start" ? "pixel" : "icon", phase: "cancelled" });
+        }
+        return null;
       case "pixel_capture_pick":
+        if (state.captureStatus && state.captureStatus.sessionId === args.sessionId && state.captureStatus.phase === "picking" && state.captureStatus.mode === "pixel") {
+          state.pickedPoints.push({ sessionId: args.sessionId as string, x: args.x as number, y: args.y as number });
+          beginSaving();
+        }
+        return null;
       case "plugin:window|close":
         return null;
       case "pixel_view_open":
@@ -345,6 +385,16 @@ export function createFakeBackend({
         return null;
       case "picker_frame":
         return state.pickerFrame ? structuredClone(state.pickerFrame) : null;
+      case "picker_pixels": {
+        if (state.pickerPixels) return state.pickerPixels;
+        const { width, height } = state.pickerSize;
+        const buffer = new ArrayBuffer(8 + width * height * 4);
+        const header = new DataView(buffer);
+        header.setUint32(0, width, true);
+        header.setUint32(4, height, true);
+        new Uint8Array(buffer, 8).fill(255);
+        return buffer;
+      }
       case "picker_frame_drawn":
         state.pickerVisible = true;
         return null;
@@ -360,6 +410,12 @@ export function createFakeBackend({
 
   return {
     state,
+    async emitCaptureStatus(status: CaptureStatus) {
+      if (state.captureStatus?.sessionId === status.sessionId) {
+        state.captureStatus = status.phase === "done" || status.phase === "cancelled" || status.phase === "failed" ? null : status;
+      }
+      await emit("pixel-capture://status", status);
+    },
     /** Arguments of every call of `command`, oldest first. */
     callsOf(command: string) {
       return calls

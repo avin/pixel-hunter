@@ -172,7 +172,10 @@ pub struct ShortcutGate {
 }
 
 impl ShortcutGate {
-    pub fn new(host: Box<dyn ShortcutHost + Send>, events: Arc<Mutex<TrackerShortcutTable>>) -> Self {
+    pub fn new(
+        host: Box<dyn ShortcutHost + Send>,
+        events: Arc<Mutex<TrackerShortcutTable>>,
+    ) -> Self {
         Self {
             state: Mutex::new(GateState {
                 registry: TrackerHotkeyRegistry::new(host),
@@ -421,7 +424,10 @@ mod tests {
         assert!(!registry.holds(tracker.id), "losing the game unregisters");
 
         registry.sync(&desired, &events);
-        assert!(registry.holds(tracker.id), "focus registers the combo again");
+        assert!(
+            registry.holds(tracker.id),
+            "focus registers the combo again"
+        );
 
         registry.sync(
             &desired_tracker_hotkeys(true, true, 0, true, &[tracker.clone()]),
@@ -464,8 +470,7 @@ mod tests {
         let tracker = running_hotkey("F5");
         let pause_combo = combo(vec![Modifier::Ctrl], "KeyP");
         let pause = HotkeyBinding::install(Some(pause_combo.clone()), FakeHost::default());
-        let pause_shortcut =
-            to_shortcut(&settings::accelerator(&pause_combo).unwrap()).unwrap();
+        let pause_shortcut = to_shortcut(&settings::accelerator(&pause_combo).unwrap()).unwrap();
         let events = Mutex::new(TrackerShortcutTable::default());
         let mut registry = TrackerHotkeyRegistry::new(Box::new(FakeHost::default()));
         let desired = desired_tracker_hotkeys(true, false, 0, true, &[tracker.clone()]);
