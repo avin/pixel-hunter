@@ -1,4 +1,4 @@
-import { act, cleanup, configure, getConfig, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, configure, getConfig, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Tracker } from "@/store/types";
@@ -82,9 +82,7 @@ describe("TrackerPage", () => {
     const { user } = renderApp(createFakeBackend({ profiles: [profileFixture()] }));
     await user.click(await screen.findByRole("link", { name: "Diablo" }));
     await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
-    await user.type(screen.getByRole("textbox", { name: "Имя" }), "Здоровье");
-    await user.click(screen.getByRole("button", { name: "Создать" }));
-    await user.click(await screen.findByRole("link", { name: "Здоровье" }));
+    expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
 
     expect(minInput()).toHaveValue(100);
     expect(maxInput()).toHaveValue(300);
@@ -218,7 +216,7 @@ describe("TrackerPage", () => {
     await user.type(nameInput(), " первый");
     await advance(500);
     expect(nameInput()).toBeEnabled();
-    expect(screen.getByText("Сохранение…")).toBeInTheDocument();
+    expect(screen.queryByText("Сохранение…")).not.toBeInTheDocument();
     await user.type(nameInput(), " второй");
     await advance(300);
     expect(backend.callsOf("tracker_update")).toHaveLength(1);
@@ -369,8 +367,8 @@ describe("TrackerPage", () => {
     const release = backend.hold("tracker_update");
     await user.type(nameInput(), " новый");
     await user.click(exitLink());
-    await screen.findByText("Сохранение…");
     expect(nameInput()).toBeDisabled();
+    expect(screen.queryByText("Сохранение…")).not.toBeInTheDocument();
     expect(backend.callsOf("tracker_update")).toHaveLength(1);
     await act(async () => { await router.navigate("/"); });
     expect(backend.callsOf("tracker_update")).toHaveLength(1);
@@ -443,10 +441,7 @@ describe("TrackerPage", () => {
     const { user } = renderApp(createFakeBackend({ profiles: [profileFixture()] }));
     await user.click(await screen.findByRole("link", { name: "Diablo" }));
     await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
-    const dialog = await screen.findByRole("dialog", { name: "Новое отслеживание" });
-    await user.type(within(dialog).getByRole("textbox", { name: "Имя" }), "Мана");
-    await user.click(within(dialog).getByRole("button", { name: "Создать" }));
-    await user.click(await screen.findByRole("link", { name: "Мана" }));
+    expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
 
     expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Пиксели");
     expect(screen.queryByRole("heading", { name: "Пиксели" })).not.toBeInTheDocument();

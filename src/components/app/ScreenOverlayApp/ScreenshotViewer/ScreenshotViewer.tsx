@@ -11,9 +11,16 @@ import type { ScreenshotViewRequest } from "@/store/types";
 import type { Point, Size } from "../physicalPoint";
 import { Screenshot } from "../Screenshot/Screenshot";
 
-const RING_RADIUS = 16;
-const RING_WIDTH = 3;
-const CROSS_REACH = 24;
+const MARKER_SIZE = 104;
+const MARKER_CENTER = MARKER_SIZE / 2;
+const RING_RADIUS = 32;
+const CROSS_REACH = 48;
+const CROSS_GAP = 8;
+const MARKER_LAYERS = [
+  { color: "var(--color-black)", width: 9 },
+  { color: "var(--color-white)", width: 6 },
+  { color: undefined, width: 3 },
+];
 
 /** The second callback runs after the browser has painted the preceding frame. */
 function waitForPaint() {
@@ -122,36 +129,44 @@ interface PixelMarkerProps {
   size: Size;
 }
 
-/** Image-space coordinates keep the marker aligned at any preview scale. */
+/** Image-relative positioning keeps the center aligned; size stays readable at any preview scale. */
 function PixelMarker({ pixel, size }: PixelMarkerProps) {
   const { width, height } = size;
-  const centerX = pixel.x + 0.5;
-  const centerY = pixel.y + 0.5;
+  const center = MARKER_CENTER;
+  const cross = [
+    `M ${center - CROSS_REACH} ${center} H ${center - CROSS_GAP}`,
+    `M ${center + CROSS_GAP} ${center} H ${center + CROSS_REACH}`,
+    `M ${center} ${center - CROSS_REACH} V ${center - CROSS_GAP}`,
+    `M ${center} ${center + CROSS_GAP} V ${center + CROSS_REACH}`,
+  ].join(" ");
 
   return (
     <svg
       role="img"
       aria-label={`Пиксель (${pixel.x}, ${pixel.y})`}
-      width="100%"
-      height="100%"
-      viewBox={`0 0 ${width} ${height}`}
-      className="pointer-events-none absolute top-0 left-0 text-red-500 animate-pixel-marker-color"
+      width={MARKER_SIZE}
+      height={MARKER_SIZE}
+      viewBox={`0 0 ${MARKER_SIZE} ${MARKER_SIZE}`}
+      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 overflow-visible"
+      style={{ left: `${(pixel.x + 0.5) / width * 100}%`, top: `${(pixel.y + 0.5) / height * 100}%` }}
     >
       <g
         className="animate-pixel-marker-motion"
-        style={{ transformOrigin: `${centerX}px ${centerY}px` }}
-        stroke="currentColor"
-        strokeWidth={1}
+        style={{ transformOrigin: `${center}px ${center}px` }}
+        fill="none"
+        strokeLinecap="round"
       >
-        <circle
-          cx={centerX}
-          cy={centerY}
-          r={RING_RADIUS}
-          fill="none"
-          strokeWidth={RING_WIDTH}
-        />
-        <line x1={centerX - CROSS_REACH} y1={centerY} x2={centerX + CROSS_REACH} y2={centerY} />
-        <line x1={centerX} y1={centerY - CROSS_REACH} x2={centerX} y2={centerY + CROSS_REACH} />
+        {MARKER_LAYERS.map((layer) => (
+          <g key={layer.width} strokeWidth={layer.width}>
+            <circle
+              cx={center}
+              cy={center}
+              r={RING_RADIUS}
+              stroke={layer.color ?? "var(--color-pixel-marker-ring)"}
+            />
+            <path d={cross} stroke={layer.color ?? "var(--color-pixel-marker-cross)"} />
+          </g>
+        ))}
       </g>
     </svg>
   );

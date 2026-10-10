@@ -73,6 +73,21 @@ export const tauriApi = createApi({
         invalidatesTags: (_result, _error, { profileId }) => [
           { type: "Profile", id: profileId },
         ],
+        async onQueryStarted({ profileId }, { dispatch, queryFulfilled }) {
+          try {
+            const { data: tracker } = await queryFulfilled;
+            dispatch(
+              tauriApi.util.updateQueryData("listProfiles", undefined, (profiles) => {
+                const profile = profiles.find(({ id }) => id === profileId);
+                if (profile && !profile.trackers.some(({ id }) => id === tracker.id)) {
+                  profile.trackers.push(tracker);
+                }
+              }),
+            );
+          } catch {
+            // Failed creation leaves the profile unchanged.
+          }
+        },
       },
     ),
     updateTracker: builder.mutation<

@@ -254,10 +254,10 @@ describe("ScreenOverlayApp viewer", () => {
     await loadScreenshot(3840, 2160);
 
     const marker = screen.getByRole("img", { name: "Пиксель (812, 1040)" });
-    const [horizontal, vertical] = marker.querySelectorAll("line");
-    expect(horizontal).toHaveAttribute("y1", String(1040.5));
-    expect(vertical).toHaveAttribute("x1", String(812.5));
-    expect(marker.querySelector("g")).toHaveAttribute("stroke-width", String(1));
+    expect(marker).toHaveStyle({
+      left: `${812.5 / 3840 * 100}%`,
+      top: `${1040.5 / 2160 * 100}%`,
+    });
   });
 
   it.each([

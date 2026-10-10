@@ -265,7 +265,6 @@ export function TrackerForm({ profileId, tracker }: Props) {
       </FieldGroup>
 
       </fieldset>
-      {(isSaving || isLeaving) && <p role="status" className="mt-2 text-muted-foreground">Сохранение…</p>}
       {saveError && <p role="alert" className="mt-2 text-destructive">{saveError}</p>}
     </form>
   );

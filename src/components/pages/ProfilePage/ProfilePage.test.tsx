@@ -1,6 +1,5 @@
 import { emit } from "@tauri-apps/api/event";
 import { act, screen, waitFor, within } from "@testing-library/react";
-import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 import { ENGINE_STATUS_EVENT } from "@/hooks/useEngineEvents";
 import type { Profile } from "@/store/types";
@@ -22,13 +21,6 @@ async function openProfile(profile: Profile) {
     await screen.findByRole("link", { name: profile.name }),
   );
   return rendered;
-}
-
-async function openCreateDialog(user: UserEvent) {
-  await user.click(
-    screen.getByRole("button", { name: "Создать отслеживание" }),
-  );
-  return screen.getByRole("dialog", { name: "Новое отслеживание" });
 }
 
 describe("ProfilePage", () => {
@@ -83,38 +75,50 @@ describe("ProfilePage", () => {
     ).toBeInTheDocument();
   });
 
-  it("creates a tracker with a name", async () => {
-    const { user, backend } = await openProfile(profileFixture());
-    const dialog = await openCreateDialog(user);
+  it.each([{ trackers: [] }, { trackers: [health] }])("creates and opens an unnamed tracker with $trackers.length existing trackers", async ({ trackers }) => {
+    const { user, backend, router } = await openProfile(profileFixture({ trackers }));
+    const release = backend.hold("profiles_list");
+    try {
+      await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
 
-    await user.type(
-      within(dialog).getByRole("textbox", { name: "Имя" }),
-      "Здоровье",
-    );
-    await user.click(within(dialog).getByRole("button", { name: "Создать" }));
-
-    expect(
-      await screen.findByRole("link", { name: "Здоровье" }),
-    ).toBeInTheDocument();
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(backend.state.profiles[0].trackers).toMatchObject([
-      { name: "Здоровье" },
-    ]);
+      expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      const savedTrackers = backend.state.profiles[0].trackers;
+      const created = savedTrackers[savedTrackers.length - 1];
+      expect(created.name).toBe("Без названия");
+      expect(router.state.location.pathname).toBe(`/profiles/${backend.state.profiles[0].id}/trackers/${created.id}`);
+      expect(backend.callsOf("tracker_create")).toHaveLength(1);
+    } finally {
+      await act(async () => release());
+    }
   });
 
-  it("does not create a tracker with an empty name", async () => {
+  it("prevents duplicate creation while the request is pending", async () => {
     const { user, backend } = await openProfile(profileFixture());
-    const dialog = await openCreateDialog(user);
-    const nameInput = within(dialog).getByRole("textbox", { name: "Имя" });
+    const release = backend.hold("tracker_create");
+    try {
+      const button = screen.getByRole("button", { name: "Создать отслеживание" });
+      await user.click(button);
+      expect(button).toBeDisabled();
+      await user.click(button);
+      expect(backend.callsOf("tracker_create")).toHaveLength(1);
+    } finally {
+      await act(async () => release());
+    }
+    expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
+  });
 
-    await user.type(nameInput, "   ");
-    await user.click(within(dialog).getByRole("button", { name: "Создать" }));
+  it("keeps the profile open and allows retry after creation fails", async () => {
+    const { user, backend } = await openProfile(profileFixture());
+    backend.failOn("tracker_create", "Не удалось создать отслеживание");
+    await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
+    await screen.findByText("Не удалось создать отслеживание");
+    expect(screen.getByRole("heading", { name: "Отслеживаний пока нет" })).toBeInTheDocument();
+    expect(backend.state.profiles[0].trackers).toHaveLength(0);
 
-    expect(
-      within(dialog).getByText("Введите имя отслеживания"),
-    ).toBeInTheDocument();
-    expect(nameInput).toHaveFocus();
-    expect(backend.state.profiles[0].trackers).toEqual([]);
+    backend.failOn("tracker_create", undefined);
+    await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
+    expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
   });
 
   it("deletes a tracker after confirmation", async () => {
@@ -194,7 +198,7 @@ describe("ProfilePage", () => {
 
       expect(runToggle()).toBeDisabled();
       expect(runToggle()).toHaveAccessibleDescription(
-        "Добавьте пиксель, чтобы запустить",
+        "Не настроено",
       );
     });
 
@@ -227,7 +231,7 @@ describe("ProfilePage", () => {
       );
 
       expect(runToggle()).toBeDisabled();
-      expect(runToggle()).toHaveAccessibleDescription("Добавьте пиксель, чтобы запустить");
+      expect(runToggle()).toHaveAccessibleDescription("Не настроено");
     });
 
     it("asks to assign a combo when a hotkey tracker has none", async () => {

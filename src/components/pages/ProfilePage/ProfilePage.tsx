@@ -13,11 +13,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { useListProfilesQuery } from "@/store/api";
+import { useCreateTrackerMutation, useListProfilesQuery } from "@/store/api";
 import { ProfileDialog } from "@/components/pages/ProfilesPage/ProfileDialog/ProfileDialog";
 import { DeleteProfileDialog } from "@/components/pages/ProfilesPage/DeleteProfileDialog/DeleteProfileDialog";
 import type { Tracker } from "@/store/types";
-import { CreateTrackerDialog } from "./CreateTrackerDialog/CreateTrackerDialog";
 import { DeleteTrackerDialog } from "./DeleteTrackerDialog/DeleteTrackerDialog";
 import { RunToggle } from "./RunToggle/RunToggle";
 
@@ -35,7 +34,7 @@ export function ProfilePage() {
   );
   const [isEditProfileOpen, setIsEditProfileOpen] = useState(false);
   const [isDeleteProfileOpen, setIsDeleteProfileOpen] = useState(false);
-  const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [createTracker, { isLoading: isCreatingTracker }] = useCreateTrackerMutation();
   const [trackerToDelete, setTrackerToDelete] = useState<Tracker>();
   const navigate = useNavigate();
 
@@ -73,7 +72,12 @@ export function ProfilePage() {
     );
   }
 
-  const openCreateDialog = () => setIsCreateDialogOpen(true);
+  async function handleCreateTracker() {
+    const result = await createTracker({ profileId, name: "Без названия" });
+    if (result.data) {
+      navigate(trackerPath(profileId, result.data.id));
+    }
+  }
 
   return (
     <div className="flex flex-col min-h-0 flex-1 gap-2 p-3">
@@ -103,7 +107,7 @@ export function ProfilePage() {
           {profile.trackers.length > 0 && (
             <>
               <Separator orientation="vertical" className="mx-2" aria-hidden="true" />
-              <Button onClick={openCreateDialog}>
+              <Button disabled={isCreatingTracker} onClick={() => void handleCreateTracker()}>
                 <Plus />
                 Создать отслеживание
               </Button>
@@ -118,10 +122,10 @@ export function ProfilePage() {
             Отслеживаний пока нет
           </h2>
           <p className="max-w-sm text-sm text-muted-foreground">
-            Отслеживание следит за пикселями на экране игры и выполняет
+            Отслеживание следит за условиями в игре и выполняет
             действие, когда условия совпадают.
           </p>
-          <Button onClick={openCreateDialog}>
+          <Button disabled={isCreatingTracker} onClick={() => void handleCreateTracker()}>
             <Plus />
             Создать отслеживание
           </Button>
@@ -188,12 +192,6 @@ export function ProfilePage() {
           profile={profile}
           onClose={() => setIsDeleteProfileOpen(false)}
           onDeleted={() => navigate("/")}
-        />
-      )}
-      {isCreateDialogOpen && (
-        <CreateTrackerDialog
-          profileId={profile.id}
-          onClose={() => setIsCreateDialogOpen(false)}
         />
       )}
       {trackerToDelete && (

@@ -7,7 +7,8 @@
 
 @theme inline {
   --animate-pixel-marker-motion: pixel-marker-motion 3s linear infinite;
-  --animate-pixel-marker-color: pixel-marker-color 1.5s ease-in-out infinite alternate;
+  --color-pixel-marker-ring: var(--color-cyan-300);
+  --color-pixel-marker-cross: var(--color-yellow-300);
   --animate-screenshot-open: screenshot-open 350ms cubic-bezier(0.16, 1, 0.3, 1) both;
   --shadow-screenshot: 0 20px 60px rgb(0 0 0 / 65%), 0 4px 16px rgb(0 0 0 / 55%);
   --radius-sm: max(0px, calc(var(--radius) - 4px));
@@ -62,11 +63,6 @@
   50% { transform: rotate(180deg) scale(1); }
   75% { transform: rotate(270deg) scale(1.35); }
   100% { transform: rotate(360deg) scale(1); }
-}
-
-@keyframes pixel-marker-color {
-  from { color: var(--color-red-500); }
-  to { color: var(--color-violet-500); }
 }
 
 @keyframes screenshot-open {
