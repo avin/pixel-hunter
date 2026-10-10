@@ -1,3 +1,4 @@
+import { Zap } from "lucide-react";
 import { useId, useState } from "react";
 import {
   AlertDialog,
@@ -63,7 +64,10 @@ export function ActionSection({ profileId, tracker }: Props) {
     <section aria-label="Действие" className="flex min-h-0 flex-col overflow-hidden border">
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-2">
-          <Label id={typeLabelId} htmlFor={typeId}>Действие</Label>
+          <Label id={typeLabelId} htmlFor={typeId} className="text-sm font-semibold">
+            <Zap aria-hidden="true" className="size-4 shrink-0" />
+            Действие
+          </Label>
           <Select
             items={TYPE_LABELS}
             value={action.type}

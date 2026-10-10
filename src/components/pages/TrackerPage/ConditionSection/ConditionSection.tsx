@@ -1,3 +1,4 @@
+import { ListFilter } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { comboLabel } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/comboLabel";
 import { KeyRecorder } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/KeyRecorder/KeyRecorder";
@@ -45,7 +46,10 @@ export function ConditionSelect({ profileId, tracker }: Props) {
 
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
-      <Label id={labelId} htmlFor={selectId}>Условие</Label>
+      <Label id={labelId} htmlFor={selectId} className="text-sm font-semibold">
+        <ListFilter aria-hidden="true" className="size-4 shrink-0" />
+        Условие
+      </Label>
       <Select
         items={TRIGGER_LABELS}
         value={tracker.trigger}
