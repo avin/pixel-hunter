@@ -72,6 +72,16 @@ pub fn run() {
                 )
                 .build(),
         )
+        .on_page_load(|webview, payload| {
+            if webview.label() == "main"
+                && payload.event() == tauri::webview::PageLoadEvent::Finished
+            {
+                // Window state is restored while hidden, before the page finishes loading.
+                if let Err(error) = webview.window().show() {
+                    eprintln!("failed to show main window: {error}");
+                }
+            }
+        })
         .setup(|app| {
             let app_data_dir = app.path().app_data_dir()?;
             let loaded = ConfigStore::load(&app_data_dir)?;

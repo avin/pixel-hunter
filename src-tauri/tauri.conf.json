@@ -13,6 +13,7 @@
     "windows": [
       {
         "title": "Pixel Hunter",
+        "visible": false,
         "width": 1100,
         "height": 700,
         "minWidth": 900,
