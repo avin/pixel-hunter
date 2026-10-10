@@ -12,8 +12,8 @@ interface Props {
 function missingPartHint(tracker: Tracker) {
   if (tracker.trigger === "hotkey") {
     if (!tracker.hotkey) return "Назначьте сочетание, чтобы запустить";
-  } else if (tracker.pixels.length === 0) {
-    return "Не настроено";
+  } else if (tracker.pixels.length === 0 && tracker.icons.length === 0) {
+    return "Добавьте пиксель или иконку, чтобы запустить";
   }
   if (actionIsEmpty(tracker.action)) return "Добавьте шаг действия, чтобы запустить";
   return undefined;

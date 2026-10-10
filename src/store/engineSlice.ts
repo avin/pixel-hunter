@@ -1,18 +1,25 @@
 import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 import { tauriApi } from "./api";
 import type { RootState } from "./index";
-import type { EngineStatus } from "./types";
+import type { EngineStatus, IconStatus } from "./types";
 
-type EngineState = Partial<EngineStatus>;
+interface EngineState extends Partial<EngineStatus> {
+  iconErrors: Record<string, IconStatus>;
+}
 
-const initialState: EngineState = {};
+const initialState: EngineState = { iconErrors: {} };
 
 export const engineSlice = createSlice({
   name: "engine",
   initialState,
   reducers: {
-    setEngineStatus(_state, action: PayloadAction<EngineStatus>) {
-      return action.payload;
+    setEngineStatus(state, action: PayloadAction<EngineStatus>) {
+      Object.assign(state, action.payload);
+    },
+    setIconStatus(state, action: PayloadAction<IconStatus>) {
+      const status = action.payload;
+      if (status.error) state.iconErrors[status.iconId] = status;
+      else delete state.iconErrors[status.iconId];
     },
   },
   extraReducers: (builder) => {
@@ -22,7 +29,7 @@ export const engineSlice = createSlice({
   },
 });
 
-export const { setEngineStatus } = engineSlice.actions;
+export const { setEngineStatus, setIconStatus } = engineSlice.actions;
 
 /** Whether the game window of the profile is in the foreground; `false` until the engine reports. */
 export function gameActiveSelector(state: RootState, profileId: string) {

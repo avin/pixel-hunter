@@ -40,6 +40,16 @@ use executor::CancelledJobs;
 use machine::Job;
 use poller::{Command, Poller};
 
+pub const ICON_STATUS_EVENT: &str = "engine://icon-status";
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconStatus {
+    pub profile_id: Uuid,
+    pub tracker_id: Uuid,
+    pub icon_id: Uuid,
+    pub error: Option<String>,
+}
+
 pub const STATUS_EVENT: &str = "engine://status";
 pub const PAUSE_EVENT: &str = "work://pause";
 
@@ -122,11 +132,30 @@ impl Engine {
         .0
     }
 
+    #[cfg(test)]
     pub fn start_with_audio(
         audio: AudioService,
         emit: impl Fn(EngineStatus) + Send + 'static,
         shortcuts: Box<dyn ShortcutHost + Send>,
         muted: Arc<dyn ShortcutMute>,
+    ) -> (Self, TrackerHotkeyLink, Arc<ShortcutGate>) {
+        Self::start_with_visuals(
+            audio,
+            emit,
+            shortcuts,
+            muted,
+            std::path::PathBuf::new(),
+            |_| {},
+        )
+    }
+
+    pub fn start_with_visuals(
+        audio: AudioService,
+        emit: impl Fn(EngineStatus) + Send + 'static,
+        shortcuts: Box<dyn ShortcutHost + Send>,
+        muted: Arc<dyn ShortcutMute>,
+        screenshot_root: std::path::PathBuf,
+        emit_icon: impl Fn(IconStatus) + Send + 'static,
     ) -> (Self, TrackerHotkeyLink, Arc<ShortcutGate>) {
         let (commands, command_receiver) = mpsc::channel();
         let hotkeys = TrackerHotkeyParts::open();
@@ -170,6 +199,8 @@ impl Engine {
             cancelled,
             paused: pause.signal.clone(),
             emit,
+            emit_icon,
+            screenshot_root,
             gate: Arc::clone(&gate),
             presses: hotkeys.presses,
             key_capture: hotkeys.key_capture,
@@ -283,7 +314,9 @@ pub(crate) fn perform_action(
     muted: &dyn ShortcutMute,
 ) -> AppResult<()> {
     match &action.kind {
-        ActionKind::KeySequence(sequence) => with_hotkeys_lifted(gate, muted, || keyboard::run_action(sequence)),
+        ActionKind::KeySequence(sequence) => {
+            with_hotkeys_lifted(gate, muted, || keyboard::run_action(sequence))
+        }
         ActionKind::NetworkDisconnect => {
             network::disconnect(process_name);
             Ok(())
@@ -617,7 +650,9 @@ mod tests {
         let host = Arc::new(Mutex::new(Host::default()));
         let gate = ShortcutGate::new(
             Box::new(SharedHost(Arc::clone(&host))),
-            Arc::new(Mutex::new(crate::tracker_hotkeys::TrackerShortcutTable::default())),
+            Arc::new(Mutex::new(
+                crate::tracker_hotkeys::TrackerShortcutTable::default(),
+            )),
         );
         let mut tracker = Tracker::new("Здоровье".into());
         tracker.trigger = crate::config::Trigger::Hotkey;

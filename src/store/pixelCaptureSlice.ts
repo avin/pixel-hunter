@@ -38,7 +38,12 @@ export const pixelCaptureSlice = createSlice({
       .addMatcher(
         tauriApi.endpoints.pixelCaptureStart.matchRejected,
         () => initialState,
-      );
+      )
+      .addMatcher(
+        tauriApi.endpoints.iconCaptureStart.matchPending,
+        (_state, action) => ({ ...action.meta.arg.originalArgs, status: { phase: "waitingForGame", remainingMs: WAIT_FOR_GAME_MS } }),
+      )
+      .addMatcher(tauriApi.endpoints.iconCaptureStart.matchRejected, () => initialState);
   },
 });
 
@@ -46,7 +51,7 @@ export const { setCaptureStatus, dismissCaptureStatus } = pixelCaptureSlice.acti
 
 export function isCapturingSelector(state: RootState) {
   const phase = state.pixelCapture.status?.phase;
-  return phase === "waitingForGame" || phase === "countdown" || phase === "picking";
+  return phase === "waitingForGame" || phase === "countdown" || phase === "picking" || phase === "selectingSearch" || phase === "selectingTemplate";
 }
 
 /** Status of the capture started from this tracker. */

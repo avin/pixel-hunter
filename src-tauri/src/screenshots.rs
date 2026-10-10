@@ -8,6 +8,7 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{imageops, Rgb, RgbImage};
 use uuid::Uuid;
 
+use crate::config::PhysicalRect;
 use crate::error::{AppError, AppResult};
 
 const THUMBNAIL_WIDTH: u32 = 320;
@@ -38,6 +39,17 @@ impl Screenshots {
     pub fn thumbnail_path(&self, profile_id: Uuid, pixel_id: Uuid) -> PathBuf {
         self.profile_dir(profile_id)
             .join(format!("{pixel_id}.thumb.png"))
+    }
+
+    pub fn template_path(&self, profile_id: Uuid, icon_id: Uuid) -> PathBuf {
+        self.profile_dir(profile_id)
+            .join(format!("{icon_id}.template.png"))
+    }
+
+    pub fn remove_icon(&self, profile_id: Uuid, icon_id: Uuid) {
+        self.remove_pixel(profile_id, icon_id);
+        let path = self.template_path(profile_id, icon_id);
+        log_failure(&path, fs::remove_file(&path));
     }
 
     /// Failures are logged: a leftover file must not block removing the pixel from the config.
@@ -241,9 +253,76 @@ fn log_failure(path: &Path, result: io::Result<()>) {
     }
 }
 
+pub fn draw_regions(
+    thumbnail: &mut RgbImage,
+    full_width: u32,
+    search: PhysicalRect,
+    template: PhysicalRect,
+) {
+    let scale = thumbnail.width() as f64 / full_width as f64;
+    for (rect, color) in [
+        (search, Rgb([40, 150, 255])),
+        (template, Rgb([255, 180, 40])),
+    ] {
+        let left = (f64::from(rect.x) * scale).floor() as u32;
+        let top = (f64::from(rect.y) * scale).floor() as u32;
+        let right = ((f64::from(rect.x) + f64::from(rect.width)) * scale).ceil() as u32;
+        let bottom = ((f64::from(rect.y) + f64::from(rect.height)) * scale).ceil() as u32;
+        for y in top..bottom.min(thumbnail.height()) {
+            for x in left..right.min(thumbnail.width()) {
+                if x == left || x + 1 == right || y == top || y + 1 == bottom {
+                    thumbnail.put_pixel(x, y, color);
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_thumbnail_has_distinct_frames_and_cleanup_removes_all_three_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let screenshots = Screenshots::new(dir.path().to_path_buf());
+        let (profile, id) = (Uuid::new_v4(), Uuid::new_v4());
+        let mut image = RgbImage::new(20, 10);
+        draw_regions(
+            &mut image,
+            20,
+            PhysicalRect {
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 10,
+            },
+            PhysicalRect {
+                x: 5,
+                y: 3,
+                width: 3,
+                height: 3,
+            },
+        );
+        assert_eq!(image.get_pixel(19, 9).0, [40, 150, 255]);
+        assert_eq!(image.get_pixel(5, 3).0, [255, 180, 40]);
+        assert_eq!(image.get_pixel(6, 4).0, [0, 0, 0]);
+        for path in [
+            screenshots.image_path(profile, id),
+            screenshots.thumbnail_path(profile, id),
+            screenshots.template_path(profile, id),
+        ] {
+            save_png(&path, &image).unwrap();
+        }
+        screenshots.remove_icon(profile, id);
+        screenshots.remove_icon(profile, id);
+        assert_eq!(
+            fs::read_dir(screenshots.profile_dir(profile))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
 
     #[test]
     fn removes_pixel_files_and_tolerates_missing_ones() {

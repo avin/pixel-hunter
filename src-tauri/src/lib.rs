@@ -7,6 +7,7 @@ mod engine;
 mod error;
 mod foreground;
 mod hotkey;
+mod icon_search;
 mod key_codes;
 mod key_sequence;
 mod keyboard;
@@ -98,13 +99,16 @@ pub fn run() {
             let emitter = app.handle().clone();
             let audio = action_sound::AudioService::start();
             app.manage(audio.clone());
-            let (engine, tracker_hotkeys, gate) = Engine::start_with_audio(
+            let icon_emitter = app.handle().clone();
+            let (engine, tracker_hotkeys, gate) = Engine::start_with_visuals(
                 audio,
                 move |status| {
                     let _ = emitter.emit(engine::STATUS_EVENT, status);
                 },
                 Box::new(hotkey::OsShortcuts::new(app.handle().clone())),
                 Arc::clone(&pause) as Arc<dyn hotkey::ShortcutMute>,
+                app_data_dir.join("screenshots"),
+                move |status| { let _ = icon_emitter.emit(engine::ICON_STATUS_EVENT, status); },
             );
             app.manage(engine);
             app.manage(tracker_hotkeys);
@@ -153,6 +157,11 @@ pub fn run() {
             #[cfg(debug_assertions)]
             commands::debug_run_action,
             commands::pixel_update,
+            commands::icon_update,
+            commands::icon_delete,
+            commands::icon_capture_start,
+            commands::icon_capture_select,
+            commands::icon_view_open,
             commands::pixel_delete,
             commands::pixel_capture_start,
             commands::pixel_capture_cancel,

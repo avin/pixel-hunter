@@ -44,7 +44,7 @@ export function Screenshot({ profileId, pixelId, isFitted = false, onLoad, onRea
     return null;
   }
   return (
-    <div className={isFitted ? "relative shrink-0" : undefined} style={isFitted && size && scale ? { width: size.width * scale, height: size.height * scale } : undefined}>
+    <div className="relative shrink-0" style={size && scale ? { width: size.width * scale, height: size.height * scale } : undefined}>
       <img
         src={screenshotSrc(dir, profileId, pixelId, "full")}
         alt="Снимок экрана"

@@ -2,11 +2,13 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use crate::action::{Action, KeyCombo};
-use crate::config::{Config, DelayRange, Pixel, PixelCondition, Profile, Tracker, Trigger};
-use crate::settings;
+use crate::config::{
+    Config, DelayRange, Icon, IconCondition, Pixel, PixelCondition, Profile, Tracker, Trigger,
+};
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::screenshots::Screenshots;
+use crate::settings;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +30,13 @@ pub struct TrackerInput {
 pub struct PixelInput {
     pub condition: PixelCondition,
     pub tolerance_percent: u8,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IconInput {
+    pub condition: IconCondition,
+    pub similarity_percent: u8,
 }
 
 pub fn list_profiles(store: &ConfigStore) -> Vec<Profile> {
@@ -245,6 +254,9 @@ pub fn delete_tracker(
     for pixel in removed.pixels {
         screenshots.remove_pixel(profile_id, pixel.id);
     }
+    for icon in removed.icons {
+        screenshots.remove_icon(profile_id, icon.id);
+    }
     Ok(())
 }
 
@@ -358,6 +370,87 @@ const PROFILE_NOT_FOUND: AppError = AppError::NotFound("Профиль не на
 const TRACKER_NOT_FOUND: AppError = AppError::NotFound("Отслеживание не найдено");
 const PIXEL_NOT_FOUND: AppError = AppError::NotFound("Пиксель не найден");
 
+pub fn add_icon(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon: Icon,
+) -> AppResult<Icon> {
+    icon.validate()?;
+    store.update(|config| {
+        find_tracker(config, profile_id, tracker_id)?
+            .icons
+            .push(icon.clone());
+        Ok(icon)
+    })
+}
+
+pub fn get_icon(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon_id: Uuid,
+) -> AppResult<Icon> {
+    store.read(|config| {
+        config
+            .profiles
+            .iter()
+            .find(|p| p.id == profile_id)
+            .ok_or(PROFILE_NOT_FOUND)?
+            .trackers
+            .iter()
+            .find(|t| t.id == tracker_id)
+            .ok_or(TRACKER_NOT_FOUND)?
+            .icons
+            .iter()
+            .find(|i| i.id == icon_id)
+            .cloned()
+            .ok_or(AppError::NotFound("Иконка не найдена"))
+    })
+}
+
+pub fn update_icon(
+    store: &ConfigStore,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon_id: Uuid,
+    input: IconInput,
+) -> AppResult<Icon> {
+    store.update(|config| {
+        let icon = find_tracker(config, profile_id, tracker_id)?
+            .icons
+            .iter_mut()
+            .find(|i| i.id == icon_id)
+            .ok_or(AppError::NotFound("Иконка не найдена"))?;
+        icon.condition = input.condition;
+        icon.similarity_percent = input.similarity_percent;
+        icon.validate()?;
+        Ok(icon.clone())
+    })
+}
+
+pub fn delete_icon(
+    store: &ConfigStore,
+    screenshots: &Screenshots,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon_id: Uuid,
+) -> AppResult<()> {
+    store.update(|config| {
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        let index = tracker
+            .icons
+            .iter()
+            .position(|i| i.id == icon_id)
+            .ok_or(AppError::NotFound("Иконка не найдена"))?;
+        tracker.icons.remove(index);
+        tracker.stop_if_incomplete();
+        Ok(())
+    })?;
+    screenshots.remove_icon(profile_id, icon_id);
+    Ok(())
+}
+
 fn find_profile(config: &mut Config, id: Uuid) -> AppResult<&mut Profile> {
     config
         .profiles
@@ -385,6 +478,123 @@ mod tests {
     use crate::config::Rgb;
     use std::fs;
     use tempfile::TempDir;
+
+    fn fixture_icon(fixture: &Fixture, profile_id: Uuid, tracker_id: Uuid) -> Icon {
+        let rect = crate::config::PhysicalRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 2,
+        };
+        let icon = Icon::new(Uuid::new_v4(), rect, rect);
+        fs::create_dir_all(fixture.screenshots.profile_dir(profile_id)).unwrap();
+        for path in [
+            fixture.screenshots.image_path(profile_id, icon.id),
+            fixture.screenshots.thumbnail_path(profile_id, icon.id),
+            fixture.screenshots.template_path(profile_id, icon.id),
+        ] {
+            fs::write(path, b"png").unwrap();
+        }
+        add_icon(&fixture.store, profile_id, tracker_id, icon).unwrap()
+    }
+
+    #[test]
+    fn icon_mutations_save_immediately_preserve_other_fields_and_stop_only_last_visual() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Game");
+        let (tracker, pixel) = complete_tracker(&fixture, profile.id);
+        let combo = combo(&[], "F5");
+        set_hotkey(&fixture.store, profile.id, tracker.id, Some(combo.clone())).unwrap();
+        let icon = fixture_icon(&fixture, profile.id, tracker.id);
+        let saved = fixture.reloaded()[0].trackers[0].clone();
+        assert_eq!(saved.icons, [icon.clone()]);
+        set_tracker_running(&fixture.store, profile.id, tracker.id, true).unwrap();
+        let updated = update_icon(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            icon.id,
+            IconInput {
+                condition: IconCondition::Absent,
+                similarity_percent: 75,
+            },
+        )
+        .unwrap();
+        let reloaded = fixture.reloaded()[0].trackers[0].clone();
+        assert_eq!(reloaded.icons, [updated.clone()]);
+        assert_eq!(reloaded.pixels, saved.pixels);
+        assert_eq!(reloaded.hotkey, Some(combo));
+        assert_eq!(reloaded.action, saved.action);
+        assert_eq!(reloaded.name, saved.name);
+        assert_eq!(reloaded.pre_action_delay_ms, saved.pre_action_delay_ms);
+        for threshold in [0, 101] {
+            assert!(update_icon(
+                &fixture.store,
+                profile.id,
+                tracker.id,
+                icon.id,
+                IconInput {
+                    condition: IconCondition::Present,
+                    similarity_percent: threshold
+                }
+            )
+            .is_err());
+        }
+        assert_eq!(fixture.reloaded()[0].trackers[0].icons, [updated]);
+        delete_pixel(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            pixel.id,
+        )
+        .unwrap();
+        assert!(is_running(&fixture));
+        delete_icon(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            icon.id,
+        )
+        .unwrap();
+        assert!(!is_running(&fixture));
+        assert!(!fixture
+            .screenshots
+            .template_path(profile.id, icon.id)
+            .exists());
+        assert!(!fixture.has_screenshot(profile.id, icon.id));
+    }
+
+    #[test]
+    fn deleting_tracker_or_profile_removes_all_icon_files_and_preserves_other_trackers() {
+        for whole_profile in [false, true] {
+            let fixture = Fixture::new();
+            let profile = fixture.profile("Game");
+            let tracker = create_tracker(&fixture.store, profile.id, "First".into()).unwrap();
+            let icon = fixture_icon(&fixture, profile.id, tracker.id);
+            let kept = create_tracker(&fixture.store, profile.id, "Second".into()).unwrap();
+            let kept_icon = fixture_icon(&fixture, profile.id, kept.id);
+            if whole_profile {
+                delete_profile(&fixture.store, &fixture.screenshots, profile.id).unwrap();
+            } else {
+                delete_tracker(&fixture.store, &fixture.screenshots, profile.id, tracker.id)
+                    .unwrap();
+            }
+            assert!(!fixture
+                .screenshots
+                .template_path(profile.id, icon.id)
+                .exists());
+            assert!(!fixture.has_screenshot(profile.id, icon.id));
+            assert_eq!(
+                fixture
+                    .screenshots
+                    .template_path(profile.id, kept_icon.id)
+                    .exists(),
+                !whole_profile
+            );
+        }
+    }
 
     struct Fixture {
         dir: TempDir,
@@ -670,16 +880,13 @@ mod tests {
         let ActionKind::KeySequence(sequence) = &mut action.kind else {
             unreachable!()
         };
-        sequence.steps[0].hold_ms = DelayRange { min: 2000, max: 3000 };
+        sequence.steps[0].hold_ms = DelayRange {
+            min: 2000,
+            max: 3000,
+        };
         sequence.steps[1].hold_ms = DelayRange { min: 100, max: 200 };
 
-        let saved = update_action(
-            &fixture.store,
-            profile.id,
-            tracker.id,
-            action,
-        )
-        .unwrap();
+        let saved = update_action(&fixture.store, profile.id, tracker.id, action).unwrap();
 
         let ActionKind::KeySequence(sequence) = &saved.kind else {
             panic!("saved action is a key sequence");
@@ -688,7 +895,10 @@ mod tests {
         assert_eq!(sequence.steps[1].delay_before_ms, delay);
         assert_eq!(
             sequence.steps[0].hold_ms,
-            DelayRange { min: 2000, max: 3000 }
+            DelayRange {
+                min: 2000,
+                max: 3000
+            }
         );
         assert_eq!(sequence.steps[1].hold_ms, DelayRange { min: 100, max: 200 });
         assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
@@ -705,7 +915,10 @@ mod tests {
         let ActionKind::KeySequence(sequence) = &mut action.kind else {
             unreachable!()
         };
-        sequence.steps[0].hold_ms = DelayRange { min: 3000, max: 2000 };
+        sequence.steps[0].hold_ms = DelayRange {
+            min: 3000,
+            max: 2000,
+        };
         assert_validation_error(update_action(
             &fixture.store,
             profile.id,
@@ -1067,7 +1280,10 @@ mod tests {
                 let tracker = &mut config.profiles[0].trackers[0];
                 tracker.hotkey = None;
                 tracker.stop_if_incomplete();
-                assert_eq!(tracker.missing_part(), Some(crate::config::MissingPart::Hotkey));
+                assert_eq!(
+                    tracker.missing_part(),
+                    Some(crate::config::MissingPart::Hotkey)
+                );
                 Ok(())
             })
             .unwrap();
@@ -1078,12 +1294,9 @@ mod tests {
             .update(|config| {
                 let tracker = &mut config.profiles[0].trackers[0];
                 tracker.trigger = Trigger::Pixels;
-                tracker.pixels.push(Pixel::new(
-                    Uuid::new_v4(),
-                    0,
-                    0,
-                    Rgb { r: 0, g: 0, b: 0 },
-                ));
+                tracker
+                    .pixels
+                    .push(Pixel::new(Uuid::new_v4(), 0, 0, Rgb { r: 0, g: 0, b: 0 }));
                 tracker.hotkey = Some(combo);
                 tracker.is_running = true;
                 tracker.stop_if_incomplete();
@@ -1128,11 +1341,7 @@ mod tests {
         let (tracker, pixel) = complete_tracker(&fixture, profile.id);
         let (other_tracker, _) = complete_tracker(&fixture, other.id);
         let second = create_tracker(&fixture.store, profile.id, "Мана".into()).unwrap();
-        settings::set_pause_hotkey(
-            &fixture.store,
-            Some(combo(&["ctrl"], "KeyP")),
-        )
-        .unwrap();
+        settings::set_pause_hotkey(&fixture.store, Some(combo(&["ctrl"], "KeyP"))).unwrap();
 
         let saved = set_hotkey(
             &fixture.store,
@@ -1141,7 +1350,10 @@ mod tests {
             Some(combo(&[], "F5")),
         )
         .unwrap();
-        assert_eq!(saved.hotkey.as_ref().map(|item| item.key.as_str()), Some("F5"));
+        assert_eq!(
+            saved.hotkey.as_ref().map(|item| item.key.as_str()),
+            Some("F5")
+        );
 
         let saved = set_hotkey(
             &fixture.store,
@@ -1150,7 +1362,10 @@ mod tests {
             Some(combo(&[], "F5")),
         )
         .unwrap();
-        assert_eq!(saved.hotkey.as_ref().map(|item| item.key.as_str()), Some("F5"));
+        assert_eq!(
+            saved.hotkey.as_ref().map(|item| item.key.as_str()),
+            Some("F5")
+        );
 
         let conflict = set_hotkey(
             &fixture.store,
@@ -1186,11 +1401,15 @@ mod tests {
         assert!(matches!(pause, Err(AppError::Validation(_))));
         assert_eq!(fixture.reloaded()[0].trackers[1].hotkey, None);
         assert_eq!(
-            fixture.reloaded()[0].trackers[0].hotkey.as_ref().map(|item| item.key.as_str()),
+            fixture.reloaded()[0].trackers[0]
+                .hotkey
+                .as_ref()
+                .map(|item| item.key.as_str()),
             Some("Digit1")
         );
 
-        let switched = set_trigger(&fixture.store, profile.id, tracker.id, Trigger::Hotkey).unwrap();
+        let switched =
+            set_trigger(&fixture.store, profile.id, tracker.id, Trigger::Hotkey).unwrap();
         assert_eq!(switched.trigger, Trigger::Hotkey);
         assert_eq!(switched.pixels, [pixel.clone()]);
         assert!(switched.hotkey.is_some());
@@ -1198,7 +1417,10 @@ mod tests {
         let back = set_trigger(&fixture.store, profile.id, tracker.id, Trigger::Pixels).unwrap();
         assert_eq!(back.trigger, Trigger::Pixels);
         assert_eq!(back.pixels, [pixel]);
-        assert_eq!(back.hotkey.as_ref().map(|item| item.key.as_str()), Some("Digit1"));
+        assert_eq!(
+            back.hotkey.as_ref().map(|item| item.key.as_str()),
+            Some("Digit1")
+        );
     }
 
     #[test]

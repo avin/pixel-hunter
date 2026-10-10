@@ -9,16 +9,18 @@ use rand::Rng;
 use uuid::Uuid;
 
 use super::executor::CancelledJobs;
-use super::machine::{EngineCore, Job};
+use super::machine::{EngineCore, Job, VisualResults};
 use super::EngineStatus;
+use super::IconStatus;
 use crate::config::{Profile, Tracker};
 use crate::foreground::{self, WindowHandle};
+use crate::icon_search::{IconResult, TemplateCache};
 use crate::keyboard::TimerResolution;
 use crate::processes;
 use crate::screen::PrimaryScreen;
-use crate::tracker_hotkeys::{
-    desired_tracker_hotkeys, ShortcutGate,
-};
+use crate::screenshots::Screenshots;
+use crate::tracker_hotkeys::{desired_tracker_hotkeys, ShortcutGate};
+use std::{collections::HashMap, path::PathBuf};
 
 pub const TICK: Duration = Duration::from_millis(50);
 const SCREEN_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -85,18 +87,20 @@ enum Flow {
     Exit,
 }
 
-pub struct Poller<E> {
+pub struct Poller<E, I> {
     pub commands: Receiver<Command>,
     pub jobs: Sender<Job>,
     pub cancelled: Arc<CancelledJobs>,
     pub paused: Arc<AtomicBool>,
     pub emit: E,
+    pub emit_icon: I,
+    pub screenshot_root: PathBuf,
     pub gate: Arc<ShortcutGate>,
     pub presses: Receiver<Uuid>,
     pub key_capture: Arc<AtomicU32>,
 }
 
-impl<E: Fn(EngineStatus)> Poller<E> {
+impl<E: Fn(EngineStatus), I: Fn(IconStatus)> Poller<E, I> {
     /// Runs until the engine handle is dropped; sleeps on the command channel while inactive.
     pub fn run(mut self) {
         let started = Instant::now();
@@ -116,7 +120,7 @@ impl<E: Fn(EngineStatus)> Poller<E> {
     fn run_active(&mut self, profile: Profile, started: Instant, rng: &mut impl Rng) -> Flow {
         let _resolution = TimerResolution::begin();
         let clock = || started.elapsed();
-        let mut session = Session::new(profile);
+        let mut session = Session::new(profile, self.screenshot_root.clone());
         let mut deadlines = Deadlines::new(clock(), TICK);
         #[cfg(debug_assertions)]
         let mut tick_log = TickLog::default();
@@ -130,25 +134,27 @@ impl<E: Fn(EngineStatus)> Poller<E> {
             let paused = self.paused.load(Ordering::SeqCst);
             let game_active = session.refresh_game(&self.emit);
             let capture = self.key_capture.load(Ordering::SeqCst);
-            let desired = desired_tracker_hotkeys(
-                true,
-                paused,
-                capture,
-                game_active,
-                session.trackers(),
-            );
+            let desired =
+                desired_tracker_hotkeys(true, paused, capture, game_active, session.trackers());
             self.gate.sync(&desired);
             let presses = self.drain_presses(game_active && !paused);
-            for job in session.tick(tick_start, paused, &presses, rng) {
+            for job in session.tick(tick_start, paused, &presses, rng, &self.emit_icon) {
                 let _ = self.jobs.send(job);
             }
 
             loop {
                 let remaining = due.saturating_sub(clock());
-                if remaining.is_zero() {
-                    break;
-                }
-                let command = match self.commands.recv_timeout(remaining) {
+                // Always drain settings/completion commands even when matching exceeds the deadline.
+                let received = if remaining.is_zero() {
+                    match self.commands.try_recv() {
+                        Ok(command) => Ok(command),
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => Err(RecvTimeoutError::Disconnected),
+                    }
+                } else {
+                    self.commands.recv_timeout(remaining)
+                };
+                let command = match received {
                     Ok(command) => command,
                     Err(RecvTimeoutError::Timeout) => break,
                     Err(RecvTimeoutError::Disconnected) => {
@@ -161,7 +167,7 @@ impl<E: Fn(EngineStatus)> Poller<E> {
                     Command::Activate(profile) => {
                         self.release_hotkeys();
                         self.cancelled.cancel(session.core.clear());
-                        session = Session::new(profile);
+                        session = Session::new(profile, self.screenshot_root.clone());
                     }
                     Command::Update(profile) => {
                         self.cancelled.cancel(session.update(profile));
@@ -205,10 +211,13 @@ struct Session {
     screen: Option<PrimaryScreen>,
     screen_retry_at: Duration,
     last_screen_error: Option<String>,
+    screenshots: Screenshots,
+    templates: TemplateCache,
+    icon_errors: HashMap<Uuid, String>,
 }
 
 impl Session {
-    fn new(profile: Profile) -> Self {
+    fn new(profile: Profile, screenshot_root: PathBuf) -> Self {
         let mut session = Self {
             profile_id: profile.id,
             process_name: String::new(),
@@ -219,6 +228,9 @@ impl Session {
             screen: None,
             screen_retry_at: Duration::ZERO,
             last_screen_error: None,
+            screenshots: Screenshots::new(screenshot_root),
+            templates: TemplateCache::default(),
+            icon_errors: HashMap::new(),
         };
         session.update(profile);
         session
@@ -228,6 +240,13 @@ impl Session {
     fn update(&mut self, profile: Profile) -> Vec<u64> {
         self.process_name = profile.process_name;
         self.trackers = profile.trackers;
+        let icons: Vec<_> = self
+            .trackers
+            .iter()
+            .flat_map(|t| t.icons.iter().map(|i| i.id))
+            .collect();
+        self.templates.retain(&icons);
+        self.icon_errors.retain(|id, _| icons.contains(id));
         self.core.set_trackers(&self.trackers)
     }
 
@@ -257,6 +276,7 @@ impl Session {
         paused: bool,
         presses: &[Uuid],
         rng: &mut impl Rng,
+        emit_icon: &impl Fn(IconStatus),
     ) -> Vec<Job> {
         let game_active = self.game_active.unwrap_or(false);
         if paused {
@@ -271,14 +291,18 @@ impl Session {
             screen,
             screen_retry_at,
             last_screen_error,
+            templates,
+            screenshots,
+            icon_errors,
+            profile_id,
             ..
         } = self;
-        core.tick(
+        core.tick_visual(
             now,
             paused,
             &process_name,
             accepted,
-            |points| {
+            |batch| {
                 if !game_active {
                     return None;
                 }
@@ -295,10 +319,47 @@ impl Session {
                         }
                     }
                 }
-                match screen.as_mut()?.read_pixels(points) {
-                    Ok(colors) => {
+                let rectangles: Vec<_> = batch
+                    .icons
+                    .iter()
+                    .map(|(_, icon)| (icon.id, icon.search_rect))
+                    .collect();
+                match screen.as_mut()?.read_visuals(&batch.points, &rectangles) {
+                    Ok((colors, images)) => {
                         *last_screen_error = None;
-                        Some(colors)
+                        let icons = images
+                            .into_iter()
+                            .map(|(id, image)| {
+                                let result = match image {
+                                    Ok(image) => templates.check(
+                                        id,
+                                        &screenshots.template_path(*profile_id, id),
+                                        &image,
+                                    ),
+                                    Err(error) => IconResult::Unavailable(error),
+                                };
+                                let tracker_id = batch
+                                    .icons
+                                    .iter()
+                                    .find(|(_, icon)| icon.id == id)
+                                    .unwrap()
+                                    .0;
+                                let error = match &result {
+                                    IconResult::Unavailable(error) => Some(error.clone()),
+                                    _ => None,
+                                };
+                                if icon_status_changed(icon_errors, id, error.clone()) {
+                                    emit_icon(IconStatus {
+                                        profile_id: *profile_id,
+                                        tracker_id,
+                                        icon_id: id,
+                                        error,
+                                    });
+                                }
+                                (id, result)
+                            })
+                            .collect();
+                        Some(VisualResults { colors, icons })
                     }
                     Err(error) => {
                         report_screen_error(last_screen_error, error.to_string());
@@ -308,6 +369,21 @@ impl Session {
             },
             rng,
         )
+    }
+}
+
+fn icon_status_changed(
+    errors: &mut HashMap<Uuid, String>,
+    id: Uuid,
+    error: Option<String>,
+) -> bool {
+    match error {
+        Some(error) if errors.get(&id) != Some(&error) => {
+            errors.insert(id, error);
+            true
+        }
+        None => errors.remove(&id).is_some(),
+        _ => false,
     }
 }
 
@@ -352,6 +428,29 @@ mod tests {
 
     fn ms(value: u64) -> Duration {
         Duration::from_millis(value)
+    }
+
+    #[test]
+    fn icon_errors_emit_only_changes_and_recovery_for_the_specific_icon() {
+        let mut errors = HashMap::new();
+        let id = Uuid::new_v4();
+        let second = Uuid::new_v4();
+        assert!(!icon_status_changed(&mut errors, id, None));
+        assert!(icon_status_changed(&mut errors, id, Some("missing".into())));
+        assert!(!icon_status_changed(
+            &mut errors,
+            id,
+            Some("missing".into())
+        ));
+        assert!(icon_status_changed(
+            &mut errors,
+            second,
+            Some("missing".into())
+        ));
+        assert!(icon_status_changed(&mut errors, id, Some("corrupt".into())));
+        assert!(icon_status_changed(&mut errors, id, None));
+        assert!(!icon_status_changed(&mut errors, id, None));
+        assert_eq!(errors.get(&second).map(String::as_str), Some("missing"));
     }
 
     #[test]

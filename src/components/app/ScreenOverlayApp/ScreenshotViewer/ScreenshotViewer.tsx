@@ -10,6 +10,7 @@ import {
 import type { ScreenshotViewRequest } from "@/store/types";
 import type { Point, Size } from "../physicalPoint";
 import { Screenshot } from "../Screenshot/Screenshot";
+import { RegionMarker } from "../RegionMarker/RegionMarker";
 
 const MARKER_SIZE = 104;
 const MARKER_CENTER = MARKER_SIZE / 2;
@@ -19,7 +20,7 @@ const CROSS_GAP = 8;
 const MARKER_LAYERS = [
   { color: "var(--color-black)", width: 9 },
   { color: "var(--color-white)", width: 6 },
-  { color: undefined, width: 3 },
+  { color: undefined, width: 4 },
 ];
 
 /** The second callback runs after the browser has painted the preceding frame. */
@@ -117,7 +118,10 @@ function ScreenshotPreview({ request }: Props) {
             void fail({ sequence: request.sequence });
           }}
         >
-          {(size) => <PixelMarker pixel={{ x: request.x, y: request.y }} size={size} />}
+          {(size) => request.marker?.kind === "icon" ? <>
+            <RegionMarker rect={request.marker.searchRect} size={size} kind="search" isPreview />
+            <RegionMarker rect={request.marker.templateRect} size={size} kind="template" isPreview />
+          </> : <PixelMarker pixel={request.marker?.kind === "pixel" ? request.marker : { x: request.x, y: request.y }} size={size} />}
         </Screenshot>
       </div>
     </div>
@@ -163,8 +167,14 @@ function PixelMarker({ pixel, size }: PixelMarkerProps) {
               cy={center}
               r={RING_RADIUS}
               stroke={layer.color ?? "var(--color-pixel-marker-ring)"}
+              className={layer.color ? undefined : "animate-preview-marker-color"}
             />
-            <path d={cross} stroke={layer.color ?? "var(--color-pixel-marker-cross)"} />
+            <path
+              d={cross}
+              stroke={layer.color ?? "var(--color-pixel-marker-cross)"}
+              className={layer.color ? undefined : "animate-preview-marker-color"}
+              style={layer.color ? undefined : { animationDelay: "-1.5s" }}
+            />
           </g>
         ))}
       </g>

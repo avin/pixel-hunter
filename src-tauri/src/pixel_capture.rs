@@ -8,10 +8,10 @@ use std::time::Duration;
 
 use image::RgbImage;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::config::Pixel;
+use crate::config::{Icon, PhysicalRect, Pixel};
 use crate::config_store::ConfigStore;
 use crate::error::{AppError, AppResult};
 use crate::foreground::WindowHandle;
@@ -40,6 +40,8 @@ pub enum CaptureStatus {
         remaining_ms: u64,
     },
     Picking,
+    SelectingSearch,
+    SelectingTemplate,
     Done,
     Cancelled,
     Timeout,
@@ -48,7 +50,7 @@ pub enum CaptureStatus {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum CaptureCommand {
     Pick {
         x: u32,
@@ -57,12 +59,42 @@ pub enum CaptureCommand {
     Cancel,
     /// The overlay window was destroyed; only ends the session while it shows the picker.
     OverlayClosed,
+    Select {
+        pixel_id: Uuid,
+        rect: PhysicalRect,
+        stage: SelectionStage,
+        reply: Sender<AppResult<SelectionReply>>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureMode {
+    #[default]
+    Pixel,
+    Icon,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SelectionStage {
+    Search,
+    Template,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionReply {
+    pub stage: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_rect: Option<PhysicalRect>,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct CaptureRequest {
     pub profile_id: Uuid,
     pub tracker_id: Uuid,
+    pub mode: CaptureMode,
 }
 
 /// Clock, desktop and UI the session runs against; faked in tests.
@@ -112,7 +144,7 @@ pub fn run_session(
     let status = match capture(env, store, screenshots, request, pixel_id, commands) {
         Ok(()) => CaptureStatus::Done,
         Err(stop) => {
-            screenshots.remove_pixel(request.profile_id, pixel_id);
+            screenshots.remove_icon(request.profile_id, pixel_id);
             match stop {
                 Stop::Cancelled => CaptureStatus::Cancelled,
                 Stop::Timeout => CaptureStatus::Timeout,
@@ -177,8 +209,14 @@ fn capture(
     }
 
     env.minimize_game(game);
-    env.reveal_picker()?;
-    env.emit(CaptureStatus::Picking);
+    if let Err(error) = env.reveal_picker() {
+        env.close_picker();
+        return Err(error.into());
+    }
+    env.emit(match request.mode {
+        CaptureMode::Pixel => CaptureStatus::Picking,
+        CaptureMode::Icon => CaptureStatus::SelectingSearch,
+    });
     let picked = pick(
         store,
         screenshots,
@@ -187,6 +225,7 @@ fn capture(
         &frame,
         &image,
         commands,
+        env,
     );
     env.close_picker();
     picked
@@ -289,6 +328,9 @@ fn check_cancelled(commands: &Receiver<CaptureCommand>) -> Result<(), Stop> {
                 return Err(Stop::Cancelled)
             }
             Ok(CaptureCommand::Pick { .. } | CaptureCommand::OverlayClosed) => {}
+            Ok(CaptureCommand::Select { reply, .. }) => {
+                let _ = reply.send(Err(AppError::Validation("Выбор ещё не готов".into())));
+            }
             Err(TryRecvError::Empty) => return Ok(()),
         }
     }
@@ -302,10 +344,15 @@ fn pick(
     frame: &Frame,
     image: &RgbImage,
     commands: &Receiver<CaptureCommand>,
+    env: &impl CaptureEnv,
 ) -> Result<(), Stop> {
+    let mut search_rect = None;
     loop {
         match commands.recv() {
             Ok(CaptureCommand::Pick { x, y }) => {
+                if request.mode != CaptureMode::Pixel {
+                    continue;
+                }
                 let Some(color) = frame.rgb_at(x, y) else {
                     continue;
                 };
@@ -319,11 +366,133 @@ fn pick(
                 profiles::add_pixel(store, request.profile_id, request.tracker_id, pixel)?;
                 return Ok(());
             }
+            Ok(CaptureCommand::Select {
+                pixel_id: selected_id,
+                rect,
+                stage,
+                reply,
+            }) => {
+                let validation = validate_selection(
+                    request.mode,
+                    pixel_id,
+                    selected_id,
+                    rect,
+                    stage,
+                    search_rect,
+                    frame.width,
+                    frame.height,
+                );
+                if let Err(error) = validation {
+                    let _ = reply.send(Err(error));
+                    continue;
+                }
+                if stage == SelectionStage::Search {
+                    search_rect = Some(rect);
+                    env.emit(CaptureStatus::SelectingTemplate);
+                    let _ = reply.send(Ok(SelectionReply {
+                        stage: "template",
+                        search_rect,
+                    }));
+                    continue;
+                }
+                let search = search_rect.expect("validated template stage");
+                let template =
+                    image::imageops::crop_imm(image, rect.x, rect.y, rect.width, rect.height)
+                        .to_image();
+                if !template.as_raw().iter().any(|&channel| channel != 0) {
+                    let _ = reply.send(Err(AppError::Validation("Полностью чёрный образец не позволяет вычислить сходство. Выберите другой образец".into())));
+                    continue;
+                }
+                let saved = (|| -> Result<(), Stop> {
+                    profiles::profile_process_name(store, request.profile_id, request.tracker_id)?;
+                    screenshots::save_png(
+                        &screenshots.template_path(request.profile_id, pixel_id),
+                        &template,
+                    )?;
+                    let mut thumbnail = screenshots::thumbnail(image);
+                    screenshots::draw_regions(&mut thumbnail, frame.width, search, rect);
+                    screenshots::save_png(
+                        &screenshots.thumbnail_path(request.profile_id, pixel_id),
+                        &thumbnail,
+                    )?;
+                    check_picker_cancelled(commands)?;
+                    profiles::add_icon(
+                        store,
+                        request.profile_id,
+                        request.tracker_id,
+                        Icon::new(pixel_id, search, rect),
+                    )?;
+                    Ok(())
+                })();
+                match saved {
+                    Ok(()) => {
+                        let _ = reply.send(Ok(SelectionReply {
+                            stage: "done",
+                            search_rect: Some(search),
+                        }));
+                        return Ok(());
+                    }
+                    Err(stop) => {
+                        let message = match &stop {
+                            Stop::Cancelled => "Выбор отменён".into(),
+                            Stop::Timeout => "Время выбора истекло".into(),
+                            Stop::Failed(error) => error.to_string(),
+                        };
+                        let _ = reply.send(Err(AppError::Capture(message)));
+                        return Err(stop);
+                    }
+                }
+            }
             Ok(CaptureCommand::Cancel | CaptureCommand::OverlayClosed) | Err(_) => {
                 return Err(Stop::Cancelled)
             }
         }
     }
+}
+
+/// Saving may take long enough for Esc to arrive after the template selection.
+/// Drain that cancellation before the config commit makes the condition visible.
+fn check_picker_cancelled(commands: &Receiver<CaptureCommand>) -> Result<(), Stop> {
+    loop {
+        match commands.try_recv() {
+            Ok(CaptureCommand::Cancel | CaptureCommand::OverlayClosed)
+            | Err(TryRecvError::Disconnected) => return Err(Stop::Cancelled),
+            Ok(CaptureCommand::Select { reply, .. }) => {
+                let _ = reply.send(Err(AppError::Validation("Образец уже сохраняется".into())));
+            }
+            Ok(CaptureCommand::Pick { .. }) => {}
+            Err(TryRecvError::Empty) => return Ok(()),
+        }
+    }
+}
+
+fn validate_selection(
+    mode: CaptureMode,
+    id: Uuid,
+    selected_id: Uuid,
+    rect: PhysicalRect,
+    stage: SelectionStage,
+    search: Option<PhysicalRect>,
+    width: u32,
+    height: u32,
+) -> AppResult<()> {
+    if mode != CaptureMode::Icon || id != selected_id {
+        return Err(AppError::Validation("Сессия выбора иконки устарела".into()));
+    }
+    if (stage == SelectionStage::Search) != search.is_none() {
+        return Err(AppError::Validation("Этап выбора уже изменился".into()));
+    }
+    if !rect.fits(width, height) {
+        return Err(AppError::Validation(
+            "Выделите непустую область внутри снимка".into(),
+        ));
+    }
+    if search.is_some_and(|search| !search.contains(rect)) {
+        return Err(AppError::Validation(
+            "Образец должен находиться внутри области поиска".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Runs at most one capture session at a time and routes commands to it.
@@ -339,7 +508,9 @@ impl PixelCapture {
     ) -> AppResult<JoinHandle<()>> {
         let mut active = lock(&self.active);
         if active.is_some() {
-            return Err(AppError::Validation("Захват пикселя уже идёт".into()));
+            return Err(AppError::Validation(
+                "Захват пикселя или иконки уже идёт".into(),
+            ));
         }
         let (sender, receiver) = mpsc::channel();
         *active = Some(sender);
@@ -357,7 +528,7 @@ impl PixelCapture {
                 let _ = sender.send(command);
                 Ok(())
             }
-            None => Err(AppError::NotFound("Захват пикселя не идёт")),
+            None => Err(AppError::NotFound("Захват не идёт")),
         }
     }
 }
@@ -410,6 +581,9 @@ mod tests {
         prepare_hangs: bool,
         fails_capture: bool,
         fails_frame: bool,
+        black_frame: bool,
+        published_id: Mutex<Option<Uuid>>,
+        before_picker: Mutex<Option<Box<dyn FnOnce() + Send>>>,
         prepare: Mutex<Outcome>,
         frame: Mutex<Outcome>,
         calls: Mutex<Vec<String>>,
@@ -480,7 +654,11 @@ mod tests {
             Ok(Frame {
                 width: 4,
                 height: 2,
-                bgra: [[1, 2, 3, 255], [30, 30, 200, 255]].repeat(4).concat(),
+                bgra: if self.black_frame {
+                    vec![0; 32]
+                } else {
+                    [[1, 2, 3, 255], [30, 30, 200, 255]].repeat(4).concat()
+                },
             })
         }
 
@@ -504,7 +682,8 @@ mod tests {
             crate::screenshots::save_stored_png(path, image)
         }
 
-        fn publish_frame(&self, _: CaptureRequest, _: Uuid) -> AppResult<()> {
+        fn publish_frame(&self, _: CaptureRequest, id: Uuid) -> AppResult<()> {
+            *lock(&self.published_id) = Some(id);
             lock(&self.calls).push("publish frame".into());
             *lock(&self.frame) = if self.fails_frame {
                 Outcome::Failed(FRAME_FAILED.into())
@@ -532,8 +711,16 @@ mod tests {
             calls.push("shutter".into());
             calls.push("show picker".into());
             drop(calls);
+            if let Some(callback) = lock(&self.before_picker).take() {
+                callback();
+            }
             if let Some((commands, sender)) = lock(&self.on_picker).take() {
-                for command in commands {
+                for mut command in commands {
+                    if let CaptureCommand::Select { pixel_id, .. } = &mut command {
+                        if pixel_id.is_nil() {
+                            *pixel_id = lock(&self.published_id).unwrap();
+                        }
+                    }
                     sender.send(command).unwrap();
                 }
             }
@@ -576,6 +763,7 @@ mod tests {
                 request: CaptureRequest {
                     profile_id: profile.id,
                     tracker_id: tracker.id,
+                    mode: CaptureMode::Pixel,
                 },
             }
         }
@@ -910,8 +1098,9 @@ mod tests {
     }
 
     #[test]
-    fn allows_one_session_at_a_time() {
-        let fixture = Fixture::new();
+    fn pixel_and_icon_modes_share_one_session_slot() {
+        let mut fixture = Fixture::new();
+        fixture.request.mode = CaptureMode::Icon;
         let capture = PixelCapture::default();
         let env = Arc::new(FakeEnv {
             game_active_from: Some(Duration::ZERO),
@@ -930,7 +1119,7 @@ mod tests {
             }
         };
         let first = capture.start(session).unwrap();
-        while !env.statuses().contains(&CaptureStatus::Picking) {
+        while !env.statuses().contains(&CaptureStatus::SelectingSearch) {
             thread::sleep(Duration::from_millis(5));
         }
 
@@ -966,5 +1155,321 @@ mod tests {
             json(CaptureStatus::Failed { reason: "x".into() }),
             serde_json::json!({ "phase": "failed", "reason": "x" })
         );
+    }
+
+    fn rect(x: u32, y: u32, width: u32, height: u32) -> PhysicalRect {
+        PhysicalRect {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    fn selection(rect: PhysicalRect, stage: SelectionStage) -> CaptureCommand {
+        CaptureCommand::Select {
+            pixel_id: Uuid::nil(),
+            rect,
+            stage,
+            reply: mpsc::channel().0,
+        }
+    }
+
+    #[test]
+    fn icon_uses_one_frame_and_commits_original_crop_with_three_files() {
+        let mut fixture = Fixture::new();
+        fixture.request.mode = CaptureMode::Icon;
+        let (sender, receiver) = mpsc::channel();
+        let env = FakeEnv {
+            game_active_from: Some(Duration::ZERO),
+            on_picker: picker_actions(
+                &[
+                    selection(rect(0, 0, 4, 2), SelectionStage::Search),
+                    selection(rect(1, 0, 1, 2), SelectionStage::Template),
+                ],
+                &sender,
+            ),
+            ..FakeEnv::default()
+        };
+        fixture.run(&env, sender, receiver);
+        assert_eq!(env.last_status(), CaptureStatus::Done);
+        assert!(env.statuses().contains(&CaptureStatus::SelectingTemplate));
+        assert_eq!(
+            env.calls()
+                .iter()
+                .filter(|c| c.starts_with("capture at"))
+                .count(),
+            1
+        );
+        assert!(env.calls().contains(&"capture at 200ms".into()));
+        let icons = fixture
+            .store
+            .read(|c| c.profiles[0].trackers[0].icons.clone());
+        assert_eq!(icons.len(), 1);
+        assert!(fixture.pixels().is_empty());
+        assert_eq!(fixture.screenshot_files(), 3);
+        let template = image::open(
+            fixture
+                .screenshots
+                .template_path(fixture.request.profile_id, icons[0].id),
+        )
+        .unwrap()
+        .to_rgb8();
+        assert_eq!(template.dimensions(), (1, 2));
+        assert_eq!(template.get_pixel(0, 0).0, [200, 30, 30]);
+        std::fs::remove_file(
+            fixture
+                .screenshots
+                .image_path(fixture.request.profile_id, icons[0].id),
+        )
+        .unwrap();
+        let mut cache = crate::icon_search::TemplateCache::default();
+        let result = cache.check(
+            icons[0].id,
+            &fixture
+                .screenshots
+                .template_path(fixture.request.profile_id, icons[0].id),
+            &template,
+        );
+        assert!(
+            result.passes(&icons[0]),
+            "missing viewer image must not disable matching"
+        );
+    }
+
+    #[test]
+    fn cancelling_both_icon_stages_or_rejecting_black_template_leaves_no_files() {
+        for (select_search, black) in [(false, false), (true, false), (true, true)] {
+            let mut fixture = Fixture::new();
+            fixture.request.mode = CaptureMode::Icon;
+            let (sender, receiver) = mpsc::channel();
+            let mut commands = vec![];
+            if select_search {
+                commands.push(selection(rect(0, 0, 4, 2), SelectionStage::Search));
+            }
+            if black {
+                commands.push(selection(rect(0, 0, 1, 1), SelectionStage::Template));
+            }
+            commands.push(CaptureCommand::Cancel);
+            let env = FakeEnv {
+                game_active_from: Some(Duration::ZERO),
+                black_frame: black,
+                on_picker: picker_actions(&commands, &sender),
+                ..FakeEnv::default()
+            };
+            fixture.run(&env, sender, receiver);
+            assert_eq!(env.last_status(), CaptureStatus::Cancelled);
+            assert_eq!(fixture.screenshot_files(), 0);
+            assert!(fixture
+                .store
+                .read(|c| c.profiles[0].trackers[0].icons.is_empty()));
+        }
+    }
+
+    #[test]
+    fn selection_rejects_empty_outside_stale_wrong_mode_and_wrong_stage() {
+        let id = Uuid::new_v4();
+        let search = rect(0, 0, 3, 2);
+        for (mode, selected, area, stage, current) in [
+            (
+                CaptureMode::Icon,
+                id,
+                rect(0, 0, 0, 1),
+                SelectionStage::Search,
+                None,
+            ),
+            (
+                CaptureMode::Icon,
+                id,
+                rect(3, 0, 2, 1),
+                SelectionStage::Search,
+                None,
+            ),
+            (
+                CaptureMode::Icon,
+                Uuid::new_v4(),
+                search,
+                SelectionStage::Search,
+                None,
+            ),
+            (CaptureMode::Pixel, id, search, SelectionStage::Search, None),
+            (
+                CaptureMode::Icon,
+                id,
+                search,
+                SelectionStage::Template,
+                None,
+            ),
+            (
+                CaptureMode::Icon,
+                id,
+                rect(2, 0, 2, 1),
+                SelectionStage::Template,
+                Some(search),
+            ),
+        ] {
+            assert!(validate_selection(mode, id, selected, area, stage, current, 4, 2).is_err());
+        }
+        assert!(validate_selection(
+            CaptureMode::Icon,
+            id,
+            id,
+            search,
+            SelectionStage::Template,
+            Some(search),
+            4,
+            2
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn removed_tracker_before_icon_commit_leaves_no_partial_files() {
+        let fixture = Fixture::new();
+        profiles::delete_tracker(
+            &fixture.store,
+            &fixture.screenshots,
+            fixture.request.profile_id,
+            fixture.request.tracker_id,
+        )
+        .unwrap();
+        let (sender, receiver) = mpsc::channel();
+        let (reply, replies) = mpsc::channel();
+        let id = Uuid::new_v4();
+        let request = CaptureRequest {
+            mode: CaptureMode::Icon,
+            ..fixture.request
+        };
+        let frame = Frame {
+            width: 4,
+            height: 2,
+            bgra: vec![1; 32],
+        };
+        let image = frame.to_rgb_image();
+        screenshots::save_png(
+            &fixture.screenshots.image_path(request.profile_id, id),
+            &image,
+        )
+        .unwrap();
+        sender
+            .send(CaptureCommand::Select {
+                pixel_id: id,
+                rect: rect(0, 0, 4, 2),
+                stage: SelectionStage::Search,
+                reply: reply.clone(),
+            })
+            .unwrap();
+        sender
+            .send(CaptureCommand::Select {
+                pixel_id: id,
+                rect: rect(1, 0, 1, 1),
+                stage: SelectionStage::Template,
+                reply,
+            })
+            .unwrap();
+        assert!(pick(
+            &fixture.store,
+            &fixture.screenshots,
+            request,
+            id,
+            &frame,
+            &image,
+            &receiver,
+            &FakeEnv::default()
+        )
+        .is_err());
+        assert!(replies.recv().unwrap().is_ok());
+        assert!(replies.recv().unwrap().is_err());
+        fixture.screenshots.remove_icon(request.profile_id, id);
+        assert_eq!(fixture.screenshot_files(), 0);
+    }
+
+    #[test]
+    fn commit_errors_remove_every_file_and_never_write_a_partial_icon() {
+        for remove_tracker in [true, false] {
+            let mut fixture = Fixture::new();
+            fixture.request.mode = CaptureMode::Icon;
+            let request = fixture.request;
+            let store = fixture.store.clone();
+            let screenshots = fixture.screenshots.clone();
+            let config_path = fixture._dir.path().join("config.json");
+            let callback = move || {
+                if remove_tracker {
+                    profiles::delete_tracker(
+                        &store,
+                        &screenshots,
+                        request.profile_id,
+                        request.tracker_id,
+                    )
+                    .unwrap();
+                } else {
+                    std::fs::remove_file(&config_path).unwrap();
+                    std::fs::create_dir(&config_path).unwrap();
+                }
+            };
+            let (sender, receiver) = mpsc::channel();
+            let env = FakeEnv {
+                game_active_from: Some(Duration::ZERO),
+                before_picker: Mutex::new(Some(Box::new(callback))),
+                on_picker: picker_actions(
+                    &[
+                        selection(rect(0, 0, 4, 2), SelectionStage::Search),
+                        selection(rect(0, 0, 1, 1), SelectionStage::Template),
+                    ],
+                    &sender,
+                ),
+                ..FakeEnv::default()
+            };
+            fixture.run(&env, sender, receiver);
+            assert!(matches!(env.last_status(), CaptureStatus::Failed { .. }));
+            assert_eq!(fixture.screenshot_files(), 0);
+            assert!(fixture
+                .store
+                .read(|c| c.profiles[0].trackers.iter().all(|t| t.icons.is_empty())));
+            assert!(env.calls().contains(&"close picker".into()));
+        }
+    }
+
+    #[test]
+    fn escape_after_template_selection_cancels_saving_before_condition_commit() {
+        let mut fixture = Fixture::new();
+        fixture.request.mode = CaptureMode::Icon;
+        let (sender, receiver) = mpsc::channel();
+        let (reply, replies) = mpsc::channel();
+        let env = FakeEnv {
+            game_active_from: Some(Duration::ZERO),
+            on_picker: picker_actions(
+                &[
+                    CaptureCommand::Select {
+                        pixel_id: Uuid::nil(),
+                        rect: rect(0, 0, 4, 2),
+                        stage: SelectionStage::Search,
+                        reply: reply.clone(),
+                    },
+                    CaptureCommand::Select {
+                        pixel_id: Uuid::nil(),
+                        rect: rect(0, 0, 1, 1),
+                        stage: SelectionStage::Template,
+                        reply,
+                    },
+                    CaptureCommand::Cancel,
+                ],
+                &sender,
+            ),
+            ..FakeEnv::default()
+        };
+        fixture.run(&env, sender, receiver);
+        assert_eq!(env.last_status(), CaptureStatus::Cancelled);
+        assert!(replies.recv().unwrap().is_ok());
+        assert!(replies.recv().unwrap().is_err());
+        assert_eq!(fixture.screenshot_files(), 0);
+        assert!(fixture
+            .store
+            .read(|c| c.profiles[0].trackers[0].icons.is_empty()));
+        assert!(ConfigStore::load(fixture._dir.path())
+            .unwrap()
+            .store
+            .read(|c| c.profiles[0].trackers[0].icons.is_empty()));
+        assert!(env.calls().contains(&"close picker".into()));
     }
 }

@@ -1,0 +1,6 @@
+[env]
+LIBCLANG_PATH = { value = "src-tauri/native/llvm-21.1.8/bin", relative = true }
+CLANG_PATH = { value = "src-tauri/native/llvm-21.1.8/bin/clang.exe", relative = true }
+OPENCV_LINK_LIBS = "opencv_core4120,opencv_imgproc4120"
+OPENCV_LINK_PATHS = { value = "src-tauri/native/install/lib", relative = true }
+OPENCV_INCLUDE_PATHS = { value = "src-tauri/native/install/include", relative = true }

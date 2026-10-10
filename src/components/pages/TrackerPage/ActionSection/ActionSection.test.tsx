@@ -88,9 +88,7 @@ describe("ActionSection", () => {
     const { user } = renderApp(createFakeBackend({ profiles: [profileFixture()] }));
     await user.click(await screen.findByRole("link", { name: "Diablo" }));
     await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
-    await user.type(screen.getByRole("textbox", { name: "Имя" }), "Здоровье");
-    await user.click(screen.getByRole("button", { name: "Создать" }));
-    await user.click(await screen.findByRole("link", { name: "Здоровье" }));
+    expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
 
     const typeSelect = screen.getByRole("combobox", { name: "Действие" });
     expect(typeSelect).toHaveTextContent("Нажатие клавиш");

@@ -18,7 +18,7 @@ export function CaptureStatusPanel({ status, processName, onCancel, onDismiss }:
       >
         <p className="min-w-0 break-words">
           {status.phase === "timeout"
-            ? "Окно игры не стало активным за 10 секунд. Пиксель не добавлен."
+            ? "Окно игры не стало активным за 10 секунд. Элемент не добавлен."
             : status.reason}
         </p>
         <Button variant="ghost" size="sm" className="shrink-0" onClick={onDismiss}>
@@ -56,6 +56,10 @@ function phaseMessage(status: CaptureStatus, processName: string) {
       return `Переключитесь в окно игры ${processName}`;
     case "countdown":
       return "Делаем снимок экрана...";
+    case "selectingSearch":
+      return <>Выберите область поиска иконки. <Kbd>Esc</Kbd> — отмена</>;
+    case "selectingTemplate":
+      return <>Выберите образец внутри области поиска. <Kbd>Esc</Kbd> — отмена</>;
     default:
       return <>Выберите точку на снимке. <Kbd>Esc</Kbd> — отмена</>;
   }

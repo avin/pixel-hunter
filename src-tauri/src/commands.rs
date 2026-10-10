@@ -5,19 +5,21 @@ use uuid::Uuid;
 
 use crate::action::{Action, KeyCombo};
 use crate::action_sound::{self, AudioService, SoundInfo};
-use crate::config::{LastScreen, Pixel, Profile, Settings, Tracker, Trigger};
+use crate::config::{Icon, LastScreen, PhysicalRect, Pixel, Profile, Settings, Tracker, Trigger};
 use crate::config_store::ConfigStore;
 use crate::engine::{Engine, WorkPause};
 use crate::error::AppResult;
 use crate::hotkey::PauseHotkeys;
-use crate::tracker_hotkeys::TrackerHotkeyLink;
 use crate::key_codes::{self, KeyCodeInfo};
-use crate::pixel_capture::{self, CaptureCommand, CaptureRequest, PixelCapture};
+use crate::pixel_capture::{
+    self, CaptureCommand, CaptureMode, CaptureRequest, PixelCapture, SelectionReply, SelectionStage,
+};
 use crate::processes::{self, WindowedProcess};
-use crate::profiles::{self, PixelInput, ProfileInput, TrackerInput};
+use crate::profiles::{self, IconInput, PixelInput, ProfileInput, TrackerInput};
 use crate::screen_overlay::{self, TauriCaptureEnv};
 use crate::screenshots::Screenshots;
 use crate::settings;
+use crate::tracker_hotkeys::TrackerHotkeyLink;
 
 /// Toggles the session pause and tells every listener. Shared by the button and the hotkey.
 pub fn toggle_work_pause(app: &AppHandle) -> WorkPause {
@@ -171,13 +173,19 @@ pub fn pause_hotkey_cancel(hotkeys: State<'_, Arc<PauseHotkeys>>) {
 
 /// Hides tracker shortcuts and the pause shortcut while a key is being recorded.
 #[tauri::command]
-pub fn key_capture_begin(hotkeys: State<'_, Arc<PauseHotkeys>>, trackers: State<'_, TrackerHotkeyLink>) {
+pub fn key_capture_begin(
+    hotkeys: State<'_, Arc<PauseHotkeys>>,
+    trackers: State<'_, TrackerHotkeyLink>,
+) {
     trackers.begin_capture();
     hotkeys.begin_capture();
 }
 
 #[tauri::command]
-pub fn key_capture_end(hotkeys: State<'_, Arc<PauseHotkeys>>, trackers: State<'_, TrackerHotkeyLink>) {
+pub fn key_capture_end(
+    hotkeys: State<'_, Arc<PauseHotkeys>>,
+    trackers: State<'_, TrackerHotkeyLink>,
+) {
     hotkeys.end_capture();
     trackers.end_capture();
 }
@@ -243,7 +251,9 @@ pub fn debug_run_action(
     let hotkeys = Arc::clone(hotkeys.inner());
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(3));
-        if let Err(error) = crate::engine::perform_action(&action, &process_name, &gate, hotkeys.as_ref()) {
+        if let Err(error) =
+            crate::engine::perform_action(&action, &process_name, &gate, hotkeys.as_ref())
+        {
             eprintln!("Действие не выполнено: {error}");
         }
     });
@@ -284,6 +294,7 @@ pub fn pixel_capture_start(
     let request = CaptureRequest {
         profile_id,
         tracker_id,
+        mode: CaptureMode::Pixel,
     };
     capture.start(move |commands| {
         let _engine_paused = app.state::<Engine>().pause();
@@ -293,6 +304,116 @@ pub fn pixel_capture_start(
         pixel_capture::run_session(&env, &store, &screenshots, request, &commands);
     })?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn icon_capture_start(
+    app: AppHandle,
+    store: State<'_, ConfigStore>,
+    capture: State<'_, PixelCapture>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+) -> AppResult<()> {
+    profiles::profile_process_name(&store, profile_id, tracker_id)?;
+    let request = CaptureRequest {
+        profile_id,
+        tracker_id,
+        mode: CaptureMode::Icon,
+    };
+    capture.start(move |commands| {
+        let _engine_paused = app.state::<Engine>().pause();
+        let env = TauriCaptureEnv::new(app.clone());
+        pixel_capture::run_session(
+            &env,
+            &app.state::<ConfigStore>(),
+            &app.state::<Screenshots>(),
+            request,
+            &commands,
+        );
+    })?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn icon_capture_select(
+    capture: State<'_, PixelCapture>,
+    pixel_id: Uuid,
+    rect: PhysicalRect,
+    stage: SelectionStage,
+) -> AppResult<SelectionReply> {
+    let (reply, receiver) = std::sync::mpsc::channel();
+    capture.send(CaptureCommand::Select {
+        pixel_id,
+        rect,
+        stage,
+        reply,
+    })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        receiver
+            .recv()
+            .map_err(|_| crate::error::AppError::Capture("Сессия выбора завершена".into()))?
+    })
+    .await
+    .map_err(|error| crate::error::AppError::Capture(error.to_string()))?
+}
+
+#[tauri::command]
+pub fn icon_update(
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon_id: Uuid,
+    input: IconInput,
+) -> AppResult<Icon> {
+    profiles::update_icon(&store, profile_id, tracker_id, icon_id, input)
+}
+
+#[tauri::command]
+pub fn icon_delete(
+    store: State<'_, ConfigStore>,
+    screenshots: State<'_, Screenshots>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon_id: Uuid,
+) -> AppResult<()> {
+    profiles::delete_icon(&store, &screenshots, profile_id, tracker_id, icon_id)
+}
+
+#[tauri::command]
+pub async fn icon_view_open(
+    app: AppHandle,
+    window: tauri::WebviewWindow,
+    store: State<'_, ConfigStore>,
+    profile_id: Uuid,
+    tracker_id: Uuid,
+    icon_id: Uuid,
+    origin: Option<crate::screenshot_viewer::ViewOrigin>,
+) -> AppResult<()> {
+    let icon = profiles::get_icon(&store, profile_id, tracker_id, icon_id)?;
+    let origin = origin
+        .map(|point| {
+            let position = window
+                .inner_position()
+                .map_err(|error| crate::error::AppError::Capture(error.to_string()))?;
+            let scale = window
+                .scale_factor()
+                .map_err(|error| crate::error::AppError::Capture(error.to_string()))?;
+            Ok::<_, crate::error::AppError>(tauri::PhysicalPosition::new(
+                f64::from(position.x) + point.x * scale,
+                f64::from(position.y) + point.y * scale,
+            ))
+        })
+        .transpose()?;
+    crate::screenshot_viewer::open_marked_viewer(
+        &app,
+        profile_id,
+        icon.id,
+        crate::screenshot_viewer::ViewMarker::Icon {
+            search_rect: icon.search_rect,
+            template_rect: icon.template_rect,
+        },
+        origin,
+    )
 }
 
 /// Without a running session there is nobody to hide a leftover picker, so it is hidden here.

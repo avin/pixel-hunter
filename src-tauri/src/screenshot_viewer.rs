@@ -9,9 +9,24 @@ use tauri::{
 };
 use uuid::Uuid;
 
+use crate::config::PhysicalRect;
 use crate::error::{AppError, AppResult};
 use crate::foreground::{self, WindowHandle};
 use crate::screen_overlay;
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ViewMarker {
+    Pixel {
+        x: u32,
+        y: u32,
+    },
+    #[serde(rename_all = "camelCase")]
+    Icon {
+        search_rect: PhysicalRect,
+        template_rect: PhysicalRect,
+    },
+}
 
 const LABEL: &str = "screenshot-viewer";
 const OPEN_EVENT: &str = "screenshot-viewer://open";
@@ -32,6 +47,7 @@ pub struct ViewRequest {
     x: u32,
     y: u32,
     origin: Option<ViewOrigin>,
+    marker: ViewMarker,
 }
 
 #[derive(Default)]
@@ -58,6 +74,7 @@ impl Requests {
             x,
             y,
             origin,
+            marker: ViewMarker::Pixel { x, y },
         };
         self.pending = Some(request.clone());
         self.prepared = false;
@@ -122,6 +139,22 @@ pub fn open_viewer(
     y: u32,
     origin: Option<PhysicalPosition<f64>>,
 ) -> AppResult<()> {
+    open_marked_viewer(
+        app,
+        profile_id,
+        pixel_id,
+        ViewMarker::Pixel { x, y },
+        origin,
+    )
+}
+
+pub fn open_marked_viewer(
+    app: &AppHandle,
+    profile_id: Uuid,
+    pixel_id: Uuid,
+    marker: ViewMarker,
+    origin: Option<PhysicalPosition<f64>>,
+) -> AppResult<()> {
     let viewer = app.state::<ScreenshotViewer>();
     let _opening = viewer.opening.lock().unwrap();
     let monitor = match origin.as_ref() {
@@ -136,11 +169,17 @@ pub fn open_viewer(
         x: (point.x - f64::from(monitor.position().x)) / monitor.scale_factor(),
         y: (point.y - f64::from(monitor.position().y)) / monitor.scale_factor(),
     });
-    let request = viewer
-        .requests
-        .lock()
-        .unwrap()
-        .open(profile_id, pixel_id, x, y, origin);
+    let (x, y) = match &marker {
+        ViewMarker::Pixel { x, y } => (*x, *y),
+        ViewMarker::Icon { template_rect, .. } => (template_rect.x, template_rect.y),
+    };
+    let request = {
+        let mut requests = viewer.requests.lock().unwrap();
+        let mut request = requests.open(profile_id, pixel_id, x, y, origin);
+        request.marker = marker;
+        requests.pending = Some(request.clone());
+        request
+    };
     let result = (|| {
         let window = match app.get_webview_window(LABEL) {
             Some(window) => {
@@ -259,6 +298,34 @@ fn window_error(error: tauri::Error) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_marker_serializes_both_physical_rectangles() {
+        let search = PhysicalRect {
+            x: 5,
+            y: 8,
+            width: 40,
+            height: 20,
+        };
+        let template = PhysicalRect {
+            x: 10,
+            y: 10,
+            width: 4,
+            height: 3,
+        };
+        assert_eq!(
+            serde_json::to_value(ViewMarker::Icon {
+                search_rect: search,
+                template_rect: template
+            })
+            .unwrap(),
+            serde_json::json!({"kind":"icon","searchRect":search,"templateRect":template})
+        );
+        assert_eq!(
+            serde_json::to_value(ViewMarker::Pixel { x: 7, y: 9 }).unwrap(),
+            serde_json::json!({"kind":"pixel","x":7,"y":9})
+        );
+    }
 
     #[test]
     fn only_the_latest_request_can_reveal_or_close_the_viewer() {

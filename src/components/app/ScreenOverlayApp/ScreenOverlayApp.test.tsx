@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAppStore } from "@/store";
+import type { ScreenshotViewRequest } from "@/store/types";
 import { createFakeBackend } from "@/test/fakeBackend";
 import { ScreenOverlayApp } from "./ScreenOverlayApp";
 
@@ -11,12 +12,12 @@ function setDevicePixelRatio(value: number) {
   Object.defineProperty(window, "devicePixelRatio", { value, configurable: true });
 }
 
-function renderOverlay(search: string, devicePixelRatio = 1) {
+function renderOverlay(search: string, devicePixelRatio = 1, viewerRequest?: ScreenshotViewRequest) {
   setDevicePixelRatio(devicePixelRatio);
   const isViewer = new URLSearchParams(search).get("view") === "viewer";
   mockWindows(isViewer ? "screenshot-viewer" : "screen-overlay");
   mockConvertFileSrc("windows");
-  const backend = createFakeBackend({ viewerRequest: isViewer ? { sequence: 1, profileId: "profile-1", pixelId: "pixel-1", x: 812, y: 1040 } : undefined });
+  const backend = createFakeBackend({ viewerRequest: isViewer ? viewerRequest ?? { sequence: 1, profileId: "profile-1", pixelId: "pixel-1", x: 812, y: 1040 } : undefined });
   backend.install();
   const user = userEvent.setup();
   render(<ScreenOverlayApp store={createAppStore()} search={search} />);
@@ -84,6 +85,7 @@ describe("ScreenOverlayApp picker", () => {
     const { user, backend } = await renderPicker(1.5);
     await showFrame(frame.profileId, frame.pixelId);
     await loadScreenshot(3840, 2160);
+    expect(screen.getByRole("status")).toHaveTextContent("выбрать пиксель");
 
     await user.pointer({
       keys: "[MouseLeft>]",
@@ -298,5 +300,110 @@ describe("ScreenOverlayApp viewer", () => {
     await user.keyboard(key);
 
     await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toHaveLength(1));
+  });
+});
+
+describe("ScreenOverlayApp icon picker", () => {
+  async function openIconPicker(dpr = 1) {
+    const rendered = renderOverlay("?view=picker", dpr);
+    await waitFor(() => expect(rendered.backend.callsOf("picker_ready")).toHaveLength(1));
+    await act(async () => { await emit("screen-overlay://frame", { profileId: "profile-1", pixelId: "icon-1", mode: "icon" }); });
+    await loadScreenshot(1920, 1080);
+    return rendered;
+  }
+
+  async function drag(user: ReturnType<typeof userEvent.setup>, start: { clientX: number; clientY: number }, end: { clientX: number; clientY: number }) {
+    const target = screen.getByRole("application");
+    await user.pointer([
+      { keys: "[MouseLeft>]", target, coords: start },
+      { target, coords: end },
+      { keys: "[/MouseLeft]", target, coords: end },
+    ]);
+  }
+
+  it("selects search before template and normalizes both reverse drags", async () => {
+    const { user, backend } = await openIconPicker(1.5);
+    expect(screen.getByRole("status")).toHaveTextContent("выбрать область для поиска иконки");
+    await drag(user, { clientX: 200, clientY: 120 }, { clientX: 20, clientY: 10 });
+    await waitFor(() => expect(backend.callsOf("icon_capture_select")).toEqual([
+      { pixelId: "icon-1", stage: "search", rect: { x: 30, y: 15, width: 270, height: 165 } },
+    ]));
+    expect(screen.getByRole("status")).toHaveTextContent("выбрать область иконки");
+    expect(screen.getByRole("img", { name: "Снимок экрана" })).toBeInTheDocument();
+    expect(backend.callsOf("pixel_capture_pick")).toEqual([]);
+    await drag(user, { clientX: 60, clientY: 50 }, { clientX: 40, clientY: 30 });
+    await waitFor(() => expect(backend.callsOf("icon_capture_select")).toHaveLength(2));
+    expect(backend.callsOf("icon_capture_select")[1]).toEqual({ pixelId: "icon-1", stage: "template", rect: { x: 60, y: 45, width: 30, height: 30 } });
+  });
+
+  it("keeps the instruction near the cursor in logical viewport coordinates", async () => {
+    const { user } = await openIconPicker(1.5);
+    await user.pointer({ target: screen.getByRole("application"), coords: { clientX: 100, clientY: 80 } });
+    expect(screen.getByRole("status")).toHaveStyle({ left: "116px", top: "96px" });
+    await user.pointer({ target: screen.getByRole("application"), coords: { clientX: 1024, clientY: 768 } });
+    const hint = screen.getByRole("status");
+    expect(Number.parseFloat(hint.style.left)).toBeLessThanOrEqual(1024);
+    expect(Number.parseFloat(hint.style.top)).toBeLessThanOrEqual(768);
+  });
+
+  it("keeps the current stage after a rejected rectangle and allows another drag", async () => {
+    const { user, backend } = await openIconPicker();
+    backend.failOn("icon_capture_select", "Образец должен находиться внутри области поиска");
+    await drag(user, { clientX: 100, clientY: 100 }, { clientX: 150, clientY: 150 });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Образец должен находиться внутри области поиска");
+    expect(screen.getByRole("status")).toHaveTextContent("выбрать область для поиска иконки");
+    backend.failOn("icon_capture_select", undefined);
+    await drag(user, { clientX: 100, clientY: 100 }, { clientX: 200, clientY: 200 });
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("выбрать область иконки"));
+  });
+
+  it("keeps a zero-size selection at the search stage", async () => {
+    const { user, backend } = await openIconPicker();
+    await drag(user, { clientX: 100, clientY: 100 }, { clientX: 100, clientY: 100 });
+    expect(await screen.findByRole("alert")).toHaveTextContent("Выделите область перетаскиванием");
+    expect(screen.getByRole("status")).toHaveTextContent("выбрать область для поиска иконки");
+    expect(backend.callsOf("icon_capture_select")).toEqual([]);
+  });
+
+  it.each(["search", "template"])("cancels on Escape during %s selection", async (stage) => {
+    const { user, backend } = await openIconPicker();
+    if (stage === "template") {
+      await drag(user, { clientX: 10, clientY: 10 }, { clientX: 100, clientY: 100 });
+      await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("выбрать область иконки"));
+    }
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(backend.callsOf("pixel_capture_cancel")).toHaveLength(1));
+    expect(backend.callsOf("icon_capture_select").filter(({ stage }) => stage === "template")).toEqual([]);
+  });
+});
+
+describe("ScreenOverlayApp icon viewer", () => {
+  const request: ScreenshotViewRequest = {
+    sequence: 1, profileId: "profile-1", pixelId: "icon-1", x: 0, y: 0,
+    marker: { kind: "icon", searchRect: { x: 100, y: 200, width: 400, height: 300 }, templateRect: { x: 150, y: 250, width: 50, height: 40 } },
+  };
+
+  it("positions both rectangles relative to the source screenshot", async () => {
+    renderOverlay("?view=viewer", 1.5, request);
+    await loadScreenshot(1000, 2000);
+    expect(screen.getByRole("img", { name: "Область поиска" })).toHaveStyle({ left: "10%", top: "10%", width: "40%", height: "15%" });
+    expect(screen.getByRole("img", { name: "Образец иконки" })).toHaveStyle({ left: "15%", top: "12.5%", width: "5%", height: "2%" });
+    expect(screen.queryByRole("img", { name: /Пиксель/ })).not.toBeInTheDocument();
+  });
+
+  it("reuses the same window for an icon after a pixel view", async () => {
+    const { user, backend } = renderOverlay("?view=viewer");
+    await loadScreenshot(1920, 1080);
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(backend.state.viewerRequest).toBeNull());
+    const next = { ...request, sequence: 2 };
+    backend.state.viewerRequest = next;
+    await act(async () => { await emit("screenshot-viewer://open", next); });
+    await loadScreenshot(1000, 2000);
+    await waitFor(() => expect(backend.state.viewerVisible).toBe(true));
+    expect(screen.getByRole("img", { name: "Образец иконки" })).toBeInTheDocument();
+    await user.click(screen.getByRole("img", { name: "Снимок экрана" }));
+    await waitFor(() => expect(backend.callsOf("screenshot_view_close")).toEqual([{ sequence: 1 }, { sequence: 2 }]));
+    expect(backend.callsOf("plugin:window|close")).toEqual([]);
   });
 });

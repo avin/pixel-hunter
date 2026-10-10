@@ -1,20 +1,22 @@
 import { emit } from "@tauri-apps/api/event";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CAPTURE_STATUS_EVENT } from "@/hooks/usePixelCaptureEvents";
-import type { CaptureStatus, Pixel } from "@/store/types";
+import type { CaptureStatus, Icon, Pixel } from "@/store/types";
 import {
   createFakeBackend,
   pixelFixture,
+  iconFixture,
+  keyStepFixture,
   profileFixture,
   trackerFixture,
 } from "@/test/fakeBackend";
 import { renderApp } from "@/test/renderApp";
 
-async function openTracker(pixels: Pixel[] = []) {
+async function openTracker(pixels: Pixel[] = [], icons: Icon[] = []) {
   const rendered = renderApp(
     createFakeBackend({
-      profiles: [profileFixture({ trackers: [trackerFixture({ pixels })] })],
+      profiles: [profileFixture({ trackers: [trackerFixture({ pixels, icons })] })],
     }),
   );
   await rendered.user.click(await screen.findByRole("link", { name: "Diablo" }));
@@ -28,6 +30,9 @@ async function emitStatus(status: CaptureStatus) {
 }
 
 const addButton = () => screen.getByRole("button", { name: "Добавить пиксель" });
+const addIconButton = () => screen.getByRole("button", { name: "Добавить иконку" });
+const iconCondition = () => screen.getByRole("combobox", { name: "Условие иконки (40, 50)" });
+const iconThreshold = () => screen.getByRole("spinbutton", { name: "Сходство иконки (40, 50), %" });
 const row = (point: string) =>
   screen.getByRole("cell", { name: point }).closest("tr") as HTMLElement;
 const conditionSelect = (point = "(812, 1040)") =>
@@ -88,7 +93,7 @@ describe("Pixel capture on TrackerPage", () => {
     await emitStatus({ phase: "cancelled" });
     expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
     expect(addButton()).toBeEnabled();
-    expect(screen.getByText("Пикселей пока нет")).toBeInTheDocument();
+    expect(await screen.findByText("Пикселей и иконок пока нет")).toBeInTheDocument();
   });
 
   it("reports that the game window was not activated", async () => {
@@ -176,7 +181,7 @@ describe("Pixel table on TrackerPage", () => {
   it("offers to add a pixel when there are none", async () => {
     await openTracker();
 
-    expect(screen.getByText("Пикселей пока нет")).toBeInTheDocument();
+    expect(screen.getByText("Пикселей и иконок пока нет")).toBeInTheDocument();
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(addButton()).toBeEnabled();
   });
@@ -298,5 +303,172 @@ describe("Pixel table on TrackerPage", () => {
     expect(backend.callsOf("pixel_delete")).toEqual([
       { profileId: "profile-1", trackerId: "tracker-1", pixelId: "pixel-1" },
     ]);
+  });
+});
+
+describe("Icon conditions on TrackerPage", () => {
+  it("starts a separate icon capture and blocks both buttons through both selections", async () => {
+    const { user, backend } = await openTracker();
+    await user.click(addIconButton());
+    expect(backend.callsOf("icon_capture_start")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1" }]);
+    expect(backend.callsOf("pixel_capture_start")).toEqual([]);
+    for (const phase of ["selectingSearch", "selectingTemplate"] as const) {
+      await emitStatus({ phase });
+      expect(addButton()).toBeDisabled();
+      expect(addIconButton()).toBeDisabled();
+      expect(screen.getByRole("status", { name: "Состояние захвата" })).toHaveTextContent(
+        phase === "selectingSearch" ? /область поиска/i : /образец/i,
+      );
+    }
+    await emitStatus({ phase: "cancelled" });
+    expect(addButton()).toBeEnabled();
+    expect(addIconButton()).toBeEnabled();
+  });
+
+  it("blocks icon capture while picking a pixel", async () => {
+    const { user } = await openTracker();
+    await user.click(addButton());
+    await emitStatus({ phase: "picking" });
+    expect(addIconButton()).toBeDisabled();
+  });
+
+  it("shows an icon without pixels and opens its own screenshot", async () => {
+    const { user, backend } = await openTracker([], [iconFixture()]);
+    expect(screen.queryByText("Пикселей и иконок пока нет")).not.toBeInTheDocument();
+    expect(iconThreshold()).toHaveValue(90);
+    expect(iconCondition()).toHaveTextContent("Иконка должна быть");
+    await user.pointer({ keys: "[MouseLeft]", target: screen.getByRole("button", { name: "Открыть снимок иконки (40, 50)" }), coords: { clientX: 120, clientY: 240 } });
+    expect(backend.callsOf("icon_view_open")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1", iconId: "icon-1", origin: { x: 120, y: 240 } }]);
+  });
+
+  it("saves absence immediately while preserving a pending name and delay draft", async () => {
+    const { user, backend } = await openTracker([pixelFixture()], [iconFixture()]);
+    const name = screen.getByRole("textbox", { name: "Имя" });
+    const minimum = screen.getByRole("spinbutton", { name: "Минимум" });
+    await user.clear(name);
+    await user.type(name, "Мана");
+    await user.clear(minimum);
+    await user.type(minimum, "125");
+    await user.click(iconCondition());
+    await user.click(await screen.findByRole("option", { name: "Иконки не должно быть" }));
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
+    expect(name).toHaveValue("Мана");
+    expect(minimum).toHaveValue(125);
+    expect(backend.state.profiles[0].trackers[0].pixels).toEqual([pixelFixture()]);
+  });
+
+  it.each([1, 100])("saves the inclusive threshold %s", async (value) => {
+    const { user, backend } = await openTracker([], [iconFixture()]);
+    await user.clear(iconThreshold());
+    await user.type(iconThreshold(), String(value));
+    await user.tab();
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].similarityPercent).toBe(value));
+  });
+
+  it.each(["0", "101", "1.5"])("rejects threshold %s after blur and follows later edits live", async (value) => {
+    const { user, backend } = await openTracker([], [iconFixture()]);
+    const error = "Введите целое число от 1 до 100";
+    await user.clear(iconThreshold());
+    await user.type(iconThreshold(), value);
+    expect(screen.queryByText(error)).not.toBeInTheDocument();
+    await user.tab();
+    expect(iconThreshold()).toBeInvalid();
+    expect(iconThreshold()).toHaveAccessibleDescription(error);
+    expect(backend.callsOf("icon_update")).toEqual([]);
+    await user.clear(iconThreshold());
+    await user.type(iconThreshold(), "5");
+    expect(screen.queryByText(error)).not.toBeInTheDocument();
+    await user.clear(iconThreshold());
+    expect(iconThreshold()).toHaveAccessibleDescription(error);
+  });
+
+  it("reveals threshold error on Enter", async () => {
+    const { user, backend } = await openTracker([], [iconFixture()]);
+    await user.clear(iconThreshold());
+    await user.keyboard("{Enter}");
+    expect(iconThreshold()).toHaveAccessibleDescription("Введите целое число от 1 до 100");
+    expect(backend.callsOf("icon_update")).toEqual([]);
+  });
+
+  it("keeps the condition editable when its viewing screenshot is missing", async () => {
+    const { user, backend } = await openTracker([], [iconFixture()]);
+    const thumbnail = screen.getByRole("button", { name: "Открыть снимок иконки (40, 50)" });
+    fireEvent.error(thumbnail.querySelector("img") as HTMLImageElement);
+    expect(screen.getByText("Снимок недоступен")).toBeInTheDocument();
+    await user.click(iconCondition());
+    await user.click(await screen.findByRole("option", { name: "Иконки не должно быть" }));
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
+  });
+
+  it("shows a placeholder when only the full screenshot is missing and keeps the template condition", async () => {
+    const fullScreenshot = document.createElement("img");
+    const probe = vi.spyOn(window, "Image").mockImplementation(class {
+      constructor() { return fullScreenshot; }
+    } as typeof Image);
+    try {
+      const { user, backend } = await openTracker([], [iconFixture()]);
+      expect(screen.getByRole("button", { name: "Открыть снимок иконки (40, 50)" })).toBeInTheDocument();
+      expect(fullScreenshot.src).toContain(encodeURIComponent("C:\\data\\screenshots\\profile-1\\icon-1.png"));
+      fireEvent.error(fullScreenshot);
+      expect(await screen.findByText("Снимок недоступен")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Открыть снимок иконки (40, 50)" })).not.toBeInTheDocument();
+      expect(iconThreshold()).toHaveValue(90);
+      await user.click(iconCondition());
+      await user.click(await screen.findByRole("option", { name: "Иконки не должно быть" }));
+      await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
+      expect(backend.state.profiles[0].trackers[0].icons[0].templateRect).toEqual(iconFixture().templateRect);
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(screen.getByText("Снимок недоступен")).toBeInTheDocument();
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it("starts with one icon and stops after its last visual condition is deleted", async () => {
+    const tracker = trackerFixture({ icons: [iconFixture()], action: { type: "keySequence", steps: [keyStepFixture()], sound: { id: null, volumePercent: 50 } } });
+    const { user, backend } = renderApp(createFakeBackend({ profiles: [profileFixture({ trackers: [tracker] })] }));
+    await user.click(await screen.findByRole("link", { name: "Diablo" }));
+    await user.click(screen.getByRole("button", { name: /Старт/ }));
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(true));
+    await user.click(screen.getByRole("link", { name: "Здоровье" }));
+    await user.click(await screen.findByRole("button", { name: "Удалить иконку (40, 50)" }));
+    await waitFor(() => expect(backend.state.profiles[0].trackers[0].isRunning).toBe(false));
+    expect(await screen.findByText("Пикселей и иконок пока нет")).toBeInTheDocument();
+  });
+
+  it("hides both visual groups for the hotkey trigger and restores their saved conditions", async () => {
+    const { user, backend } = await openTracker([pixelFixture()], [iconFixture()]);
+    await user.click(screen.getByRole("combobox", { name: "Условие" }));
+    await user.click(await screen.findByRole("option", { name: "Хоткей" }));
+    await screen.findByRole("button", { name: "Назначить" });
+    expect(screen.queryByRole("button", { name: "Добавить пиксель" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Добавить иконку" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("spinbutton", { name: "Сходство иконки (40, 50), %" })).not.toBeInTheDocument();
+    expect(backend.state.profiles[0].trackers[0].icons).toEqual([iconFixture()]);
+    await user.click(screen.getByRole("combobox", { name: "Условие" }));
+    await user.click(await screen.findByRole("option", { name: "Пиксели" }));
+    expect(await screen.findByRole("spinbutton", { name: "Сходство иконки (40, 50), %" })).toHaveValue(90);
+    expect(toleranceInput()).toHaveValue(10);
+  });
+
+  it("shows an unavailable sample error and clears it when availability returns", async () => {
+    await openTracker([], [iconFixture()]);
+    const status = { profileId: "profile-1", trackerId: "tracker-1", iconId: "icon-1", error: "Файл образца недоступен" };
+    await act(() => emit("engine://icon-status", status));
+    expect(await screen.findByRole("alert")).toHaveTextContent(status.error);
+    expect(iconThreshold()).toBeEnabled();
+    await act(() => emit("engine://icon-status", { ...status, error: null }));
+    await waitFor(() => expect(screen.queryByRole("alert")).not.toBeInTheDocument());
+  });
+
+  it("keeps a failed threshold edit visible and preserves the persisted condition", async () => {
+    const { user, backend } = await openTracker([], [iconFixture()]);
+    backend.failOn("icon_update", "Не удалось сохранить иконку");
+    await user.clear(iconThreshold());
+    await user.type(iconThreshold(), "75");
+    await user.tab();
+    await waitFor(() => expect(backend.callsOf("icon_update")).toHaveLength(1));
+    expect(iconThreshold()).toHaveValue(75);
+    expect(backend.state.profiles[0].trackers[0].icons[0]).toEqual(iconFixture());
   });
 });

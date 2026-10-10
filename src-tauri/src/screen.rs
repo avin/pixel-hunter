@@ -17,8 +17,10 @@ use windows::Win32::Graphics::Dxgi::{
 };
 use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
 
-use crate::config::Rgb;
+use crate::config::{PhysicalRect, Rgb};
 use crate::error::{AppError, AppResult};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 const FRAME_TIMEOUT_MS: u32 = 100;
 /// `AcquireNextFrame` calls per request; covers the wait for the first desktop image.
@@ -85,6 +87,7 @@ pub struct PrimaryScreen {
     /// Copy of the last acquired desktop image; `AcquireNextFrame` only returns changes.
     last_frame: Option<ID3D11Texture2D>,
     points_staging: Option<(u32, ID3D11Texture2D)>,
+    roi_staging: HashMap<Uuid, (u32, u32, ID3D11Texture2D)>,
 }
 
 impl PrimaryScreen {
@@ -115,6 +118,7 @@ impl PrimaryScreen {
                 duplication: None,
                 last_frame: None,
                 points_staging: None,
+                roi_staging: HashMap::new(),
             })
         }
     }
@@ -137,7 +141,18 @@ impl PrimaryScreen {
             return Ok(Vec::new());
         }
         let frame = self.current_frame()?;
-        let desc = bgra_frame_desc(&frame)?;
+        self.read_points_from(&frame, points)
+    }
+
+    fn read_points_from(
+        &mut self,
+        frame: &ID3D11Texture2D,
+        points: &[(u32, u32)],
+    ) -> AppResult<Vec<Rgb>> {
+        if points.is_empty() {
+            return Ok(vec![]);
+        }
+        let desc = bgra_frame_desc(frame)?;
         if let Some(&(x, y)) = points
             .iter()
             .find(|&&(x, y)| x >= desc.Width || y >= desc.Height)
@@ -158,7 +173,7 @@ impl PrimaryScreen {
                     column,
                     0,
                     0,
-                    &frame,
+                    frame,
                     0,
                     Some(&source),
                 );
@@ -166,6 +181,76 @@ impl PrimaryScreen {
         }
         let row = self.read_staging(&staging, columns, 1)?;
         Ok(row.chunks_exact(4).map(bgra_to_rgb).collect())
+    }
+
+    /// All copies refer to the same acquired texture; no second capture between points and ROIs.
+    pub fn read_visuals(
+        &mut self,
+        points: &[(u32, u32)],
+        rectangles: &[(Uuid, PhysicalRect)],
+    ) -> AppResult<(Vec<Rgb>, Vec<(Uuid, Result<RgbImage, String>)>)> {
+        if rectangles.is_empty() {
+            return self.read_pixels(points).map(|colors| (colors, vec![]));
+        }
+        let frame = self.current_frame()?;
+        let desc = bgra_frame_desc(&frame)?;
+        let colors = self.read_points_from(&frame, points)?;
+        self.roi_staging
+            .retain(|id, _| rectangles.iter().any(|(active, _)| active == id));
+        let mut images = Vec::with_capacity(rectangles.len());
+        for (id, rect) in rectangles {
+            let image = (|| -> AppResult<RgbImage> {
+                if !rect_fits(*rect, desc.Width, desc.Height) {
+                    return Err(AppError::Capture(
+                        "Область поиска вне текущего экрана".into(),
+                    ));
+                }
+                let cached = self
+                    .roi_staging
+                    .get(id)
+                    .filter(|(w, h, _)| *w == rect.width && *h == rect.height)
+                    .map(|(_, _, t)| t.clone());
+                let staging = match cached {
+                    Some(texture) => texture,
+                    None => {
+                        let texture = self.create_staging(rect.width, rect.height)?;
+                        self.roi_staging
+                            .insert(*id, (rect.width, rect.height, texture.clone()));
+                        texture
+                    }
+                };
+                let source = D3D11_BOX {
+                    left: rect.x,
+                    top: rect.y,
+                    right: rect.x + rect.width,
+                    bottom: rect.y + rect.height,
+                    front: 0,
+                    back: 1,
+                };
+                unsafe {
+                    self.context.CopySubresourceRegion(
+                        &staging,
+                        0,
+                        0,
+                        0,
+                        0,
+                        &frame,
+                        0,
+                        Some(&source),
+                    );
+                }
+                let bgra = self.read_staging(&staging, rect.width, rect.height)?;
+                let rgb = bgra
+                    .chunks_exact(4)
+                    .flat_map(|p| [p[2], p[1], p[0]])
+                    .collect();
+                RgbImage::from_raw(rect.width, rect.height, rgb)
+                    .ok_or_else(|| AppError::Capture("Некорректный размер области".into()))
+            })()
+            .map_err(|e| e.to_string());
+            images.push((*id, image));
+        }
+        Ok((colors, images))
     }
 
     fn current_frame(&mut self) -> AppResult<ID3D11Texture2D> {
@@ -332,6 +417,19 @@ impl PrimaryScreen {
     }
 }
 
+fn rect_fits(rect: PhysicalRect, width: u32, height: u32) -> bool {
+    rect.width > 0
+        && rect.height > 0
+        && rect
+            .x
+            .checked_add(rect.width)
+            .is_some_and(|edge| edge <= width)
+        && rect
+            .y
+            .checked_add(rect.height)
+            .is_some_and(|edge| edge <= height)
+}
+
 fn primary_output() -> AppResult<(IDXGIAdapter1, IDXGIOutput1)> {
     unsafe {
         let primary = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
@@ -433,6 +531,131 @@ mod tests {
             ]
         );
         assert!(point_copies(&[(5, 7)]).all(|(_, source)| source.front == 0 && source.back == 1));
+    }
+
+    #[test]
+    fn roi_bounds_are_half_open_and_overflow_safe() {
+        assert!(rect_fits(
+            PhysicalRect {
+                x: 2,
+                y: 3,
+                width: 8,
+                height: 7
+            },
+            10,
+            10
+        ));
+        for rect in [
+            PhysicalRect {
+                x: 0,
+                y: 0,
+                width: 0,
+                height: 1,
+            },
+            PhysicalRect {
+                x: 9,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+            PhysicalRect {
+                x: u32::MAX,
+                y: 0,
+                width: 2,
+                height: 1,
+            },
+        ] {
+            assert!(!rect_fits(rect, 10, 10));
+        }
+    }
+    #[test]
+    #[ignore]
+    fn measures_visual_poll_on_windows() {
+        use crate::icon_search::{IconResult, TemplateCache};
+        use std::time::Instant;
+        let mut screen = PrimaryScreen::new().unwrap();
+        let frame = screen.capture_frame().unwrap();
+        let rgb = frame.to_rgb_image();
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache = TemplateCache::default();
+        let rect = PhysicalRect {
+            x: 0,
+            y: 0,
+            width: frame.width.min(1200),
+            height: frame.height.min(800),
+        };
+        let ids: Vec<_> = (0..3).map(|_| Uuid::new_v4()).collect();
+        let template = image::imageops::crop_imm(&rgb, 0, 0, 24, 24).to_image();
+        for id in &ids {
+            template.save(dir.path().join(format!("{id}.png"))).unwrap();
+        }
+        let rectangles: Vec<_> = ids.iter().map(|id| (*id, rect)).collect();
+        let points = [(0, 0), (frame.width - 1, frame.height - 1)];
+        let mut pixel_times = vec![];
+        let mut pixel_periods = vec![];
+        let mut previous_pixel = None;
+        for _ in 0..100 {
+            let start = Instant::now();
+            if let Some(last) = previous_pixel.replace(start) {
+                pixel_periods.push(start.duration_since(last).as_secs_f64() * 1000.0);
+            }
+            screen.read_pixels(&points).unwrap();
+            let elapsed = start.elapsed();
+            pixel_times.push(elapsed.as_secs_f64() * 1000.0);
+            std::thread::sleep(std::time::Duration::from_millis(50).saturating_sub(elapsed));
+        }
+        pixel_times.sort_by(f64::total_cmp);
+        pixel_periods.sort_by(f64::total_cmp);
+        println!(
+            "Pixels-only scheduled polling period p95 {:.3}ms",
+            pixel_periods[93]
+        );
+        println!(
+            "Pixels-only same compact path: 2 points n100 p95 {:.3}ms",
+            pixel_times[94]
+        );
+        let mut elapsed = Vec::new();
+        let mut readback = Vec::new();
+        let mut matching = Vec::new();
+        let mut periods = Vec::new();
+        let mut previous = None;
+        for _ in 0..100 {
+            let start = Instant::now();
+            if let Some(last) = previous.replace(start) {
+                periods.push(start.duration_since(last).as_secs_f64() * 1000.0);
+            }
+            let (colors, images) = screen.read_visuals(&points, &rectangles).unwrap();
+            let copied = start.elapsed();
+            assert_eq!(colors.len(), 2);
+            for (id, image) in images {
+                let image = image.unwrap();
+                let pixel = image.get_pixel(0, 0).0;
+                assert_eq!(
+                    colors[0],
+                    Rgb {
+                        r: pixel[0],
+                        g: pixel[1],
+                        b: pixel[2]
+                    },
+                    "point and ROI must read the same acquired texture"
+                );
+                let result = cache.check(id, &dir.path().join(format!("{id}.png")), &image);
+                assert!(matches!(result, IconResult::Similarity(_)));
+            }
+            let total = start.elapsed();
+            readback.push(copied.as_secs_f64() * 1000.0);
+            matching.push((total - copied).as_secs_f64() * 1000.0);
+            elapsed.push(total.as_secs_f64() * 1000.0);
+            std::thread::sleep(std::time::Duration::from_millis(50).saturating_sub(total));
+        }
+        let p95 = |samples: &mut Vec<f64>| {
+            samples.sort_by(f64::total_cmp);
+            samples[94]
+        };
+        periods.sort_by(f64::total_cmp);
+        println!("Visual polling actual start-to-start p95 {:.2} ms (50ms schedule, no overlapping jobs)",periods[93]);
+        let misses = elapsed.iter().filter(|ms| **ms > 50.0).count();
+        println!("Windows actual DXGI {}x{}, 2 points + 3 ROIs {}x{}, templates24x24, n100: readback p95 {:.2} ms, matching p95 {:.2} ms, total p95 {:.2} ms, deadline misses {}/100",frame.width,frame.height,rect.width,rect.height,p95(&mut readback),p95(&mut matching),p95(&mut elapsed),misses);
     }
 
     /// Saves the primary monitor to a PNG in the temp directory:

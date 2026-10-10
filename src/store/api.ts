@@ -2,6 +2,10 @@ import { createApi } from "@reduxjs/toolkit/query/react";
 import { tauriBaseQuery } from "./tauriBaseQuery";
 import type {
   Action,
+  Icon,
+  IconInput,
+  IconSelection,
+  PhysicalRect,
   ActionSoundInfo,
   AppSettings,
   KeyCodeInfo,
@@ -269,6 +273,23 @@ export const tauriApi = createApi({
         { type: "Profile", id: profileId },
       ],
     }),
+    iconUpdate: builder.mutation<Icon, { profileId: string; trackerId: string; iconId: string; input: IconInput }>({
+      query: (args) => ({ command: "icon_update", args }),
+      invalidatesTags: (_result, _error, { profileId }) => [{ type: "Profile", id: profileId }],
+    }),
+    iconDelete: builder.mutation<void, { profileId: string; trackerId: string; iconId: string }>({
+      query: (args) => ({ command: "icon_delete", args }),
+      invalidatesTags: (_result, _error, { profileId }) => [{ type: "Profile", id: profileId }],
+    }),
+    iconCaptureStart: builder.mutation<void, { profileId: string; trackerId: string }>({
+      query: (args) => ({ command: "icon_capture_start", args }),
+    }),
+    iconCaptureSelect: builder.mutation<IconSelection, { pixelId: string; rect: PhysicalRect; stage: "search" | "template" }>({
+      query: (args) => ({ command: "icon_capture_select", args }),
+    }),
+    iconViewOpen: builder.mutation<void, { profileId: string; trackerId: string; iconId: string; origin: { x: number; y: number } }>({
+      query: (args) => ({ command: "icon_view_open", args }),
+    }),
     pixelDelete: builder.mutation<void, PixelArgs>({
       query: ({ profileId, trackerId, pixelId }) => ({
         command: "pixel_delete",
@@ -370,6 +391,11 @@ export const {
   useActionSoundPreviewMutation,
   useActionSoundStopPreviewMutation,
   usePixelUpdateMutation,
+  useIconUpdateMutation,
+  useIconDeleteMutation,
+  useIconCaptureStartMutation,
+  useIconCaptureSelectMutation,
+  useIconViewOpenMutation,
   usePixelDeleteMutation,
   usePixelCaptureStartMutation,
   usePixelCaptureCancelMutation,

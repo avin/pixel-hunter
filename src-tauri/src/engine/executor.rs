@@ -419,7 +419,10 @@ mod tests {
         let ActionKind::KeySequence(sequence) = &mut action.kind else {
             unreachable!()
         };
-        sequence.steps[0].hold_ms = crate::config::DelayRange { min: 2500, max: 2500 };
+        sequence.steps[0].hold_ms = crate::config::DelayRange {
+            min: 2500,
+            max: 2500,
+        };
         sender.send(job(1, action)).unwrap();
         sender.send(job(2, keys(&["KeyE"]))).unwrap();
         drop(sender);

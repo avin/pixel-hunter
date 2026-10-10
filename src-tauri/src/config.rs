@@ -110,6 +110,8 @@ pub struct Tracker {
     #[serde(default)]
     pub pixels: Vec<Pixel>,
     #[serde(default)]
+    pub icons: Vec<Icon>,
+    #[serde(default)]
     pub trigger: Trigger,
     #[serde(default)]
     pub hotkey: Option<KeyCombo>,
@@ -131,7 +133,7 @@ pub enum MissingPart {
 impl MissingPart {
     pub fn message(self) -> &'static str {
         match self {
-            MissingPart::Pixels => "Добавьте пиксель, чтобы запустить отслеживание",
+            MissingPart::Pixels => "Добавьте пиксель или иконку, чтобы запустить отслеживание",
             MissingPart::Hotkey => "Назначьте сочетание, чтобы запустить отслеживание",
             MissingPart::ActionSteps => "Добавьте шаг действия, чтобы запустить отслеживание",
         }
@@ -146,6 +148,7 @@ impl Tracker {
             pre_action_delay_ms: DelayRange::default(),
             resume_delay_ms: DEFAULT_RESUME_DELAY_MS,
             pixels: Vec::new(),
+            icons: Vec::new(),
             trigger: Trigger::Pixels,
             hotkey: None,
             action: Action::default(),
@@ -160,7 +163,9 @@ impl Tracker {
 
     pub fn missing_part(&self) -> Option<MissingPart> {
         let condition = match self.trigger {
-            Trigger::Pixels if self.pixels.is_empty() => Some(MissingPart::Pixels),
+            Trigger::Pixels if self.pixels.is_empty() && self.icons.is_empty() => {
+                Some(MissingPart::Pixels)
+            }
             Trigger::Hotkey if self.hotkey.is_none() => Some(MissingPart::Hotkey),
             _ => None,
         };
@@ -220,6 +225,93 @@ pub enum PixelCondition {
     NotEquals,
 }
 
+/// Half-open rectangle in physical pixels of the primary monitor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PhysicalRect {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl PhysicalRect {
+    pub fn fits(self, width: u32, height: u32) -> bool {
+        self.width > 0
+            && self.height > 0
+            && self
+                .x
+                .checked_add(self.width)
+                .is_some_and(|end| end <= width)
+            && self
+                .y
+                .checked_add(self.height)
+                .is_some_and(|end| end <= height)
+    }
+
+    pub fn contains(self, other: Self) -> bool {
+        other.x >= self.x
+            && other.y >= self.y
+            && other
+                .x
+                .checked_sub(self.x)
+                .zip(other.y.checked_sub(self.y))
+                .is_some_and(|(x, y)| Self { x, y, ..other }.fits(self.width, self.height))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum IconCondition {
+    #[default]
+    Present,
+    Absent,
+}
+
+fn default_similarity_percent() -> u8 {
+    90
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Icon {
+    pub id: Uuid,
+    pub search_rect: PhysicalRect,
+    pub template_rect: PhysicalRect,
+    #[serde(default)]
+    pub condition: IconCondition,
+    #[serde(default = "default_similarity_percent")]
+    pub similarity_percent: u8,
+}
+
+impl Icon {
+    pub fn new(id: Uuid, search_rect: PhysicalRect, template_rect: PhysicalRect) -> Self {
+        Self {
+            id,
+            search_rect,
+            template_rect,
+            condition: IconCondition::Present,
+            similarity_percent: 90,
+        }
+    }
+
+    pub fn validate(&self) -> AppResult<()> {
+        if !(1..=100).contains(&self.similarity_percent) {
+            return Err(AppError::Validation(
+                "Порог сходства должен быть от 1 до 100 процентов".into(),
+            ));
+        }
+        if !self.search_rect.fits(u32::MAX, u32::MAX)
+            || !self.search_rect.contains(self.template_rect)
+        {
+            return Err(AppError::Validation(
+                "Образец должен полностью находиться в непустой области поиска".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rgb {
     pub r: u8,
@@ -261,6 +353,48 @@ fn validate_name(value: &str, message: &str) -> AppResult<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn icons_default_round_trip_validate_thresholds_and_allow_icon_only_tracker() {
+        let mut tracker: Tracker =
+            serde_json::from_value(tracker_json(json!({"min":100,"max":300}), 1000)).unwrap();
+        assert!(tracker.icons.is_empty());
+        let area = PhysicalRect {
+            x: 1,
+            y: 2,
+            width: 4,
+            height: 5,
+        };
+        let mut icon = Icon::new(Uuid::new_v4(), area, area);
+        assert_eq!(icon.similarity_percent, 90);
+        for threshold in [1, 90, 100] {
+            icon.similarity_percent = threshold;
+            assert!(icon.validate().is_ok());
+        }
+        for threshold in [0, 101] {
+            icon.similarity_percent = threshold;
+            assert!(icon.validate().is_err());
+        }
+        icon.similarity_percent = 90;
+        tracker.icons.push(icon);
+        tracker.action.kind = crate::action::ActionKind::NetworkDisconnect;
+        assert!(tracker.is_complete());
+        tracker.is_running = true;
+        tracker.stop_if_incomplete();
+        assert!(tracker.is_running);
+        assert_eq!(
+            serde_json::from_value::<Tracker>(serde_json::to_value(&tracker).unwrap()).unwrap(),
+            tracker
+        );
+        assert!(serde_json::from_value::<Icon>(json!({"id":Uuid::new_v4(),"searchRect":area,"templateRect":area,"similarityPercent":90.5})).is_err());
+        assert!(!PhysicalRect {
+            x: u32::MAX,
+            y: 0,
+            width: 1,
+            height: 1
+        }
+        .fits(u32::MAX, 1));
+    }
 
     fn tracker_json(
         pre_action_delay_ms: serde_json::Value,
@@ -311,6 +445,7 @@ mod tests {
                         "preActionDelayMs": { "min": 100, "max": 300 },
                         "resumeDelayMs": 1000,
                         "pixels": [],
+                        "icons": [],
                         "trigger": "pixels",
                         "hotkey": null,
                         "action": { "type": "keySequence", "steps": [], "sound": { "id": null, "volumePercent": 50 } },
@@ -572,7 +707,10 @@ mod tests {
         running_pixels.is_running = true;
         running_pixels.trigger = Trigger::Hotkey;
         running_pixels.stop_if_incomplete();
-        assert!(!running_pixels.is_running, "switching to a hotkey without a combo stops");
+        assert!(
+            !running_pixels.is_running,
+            "switching to a hotkey without a combo stops"
+        );
 
         let mut back = complete_tracker();
         back.is_running = true;

@@ -26,11 +26,43 @@ export interface PixelInput {
   tolerancePercent: number;
 }
 
+/** Half-open rectangle in physical pixels. */
+export interface PhysicalRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export type IconCondition = "present" | "absent";
+
+export interface Icon {
+  id: string;
+  searchRect: PhysicalRect;
+  templateRect: PhysicalRect;
+  condition: IconCondition;
+  similarityPercent: number;
+}
+
+export interface IconInput {
+  condition: IconCondition;
+  similarityPercent: number;
+}
+
+export interface IconStatus {
+  profileId: string;
+  trackerId: string;
+  iconId: string;
+  error: string | null;
+}
+
 /** Payload of the `pixel-capture://status` event. */
 export type CaptureStatus =
   | { phase: "waitingForGame"; remainingMs: number }
   | { phase: "countdown"; remainingMs: number }
   | { phase: "picking" }
+  | { phase: "selectingSearch" }
+  | { phase: "selectingTemplate" }
   | { phase: "done" }
   | { phase: "cancelled" }
   | { phase: "timeout" }
@@ -89,6 +121,7 @@ export interface Tracker {
   preActionDelayMs: DelayRange;
   resumeDelayMs: number;
   pixels: Pixel[];
+  icons: Icon[];
   /** Missing data from an older config means pixels. */
   trigger: Trigger;
   hotkey: KeyCombo | null;
@@ -146,6 +179,12 @@ export interface TrackerInput {
 export interface PickerFrame {
   profileId: string;
   pixelId: string;
+  mode?: "pixel" | "icon";
+}
+
+export interface IconSelection {
+  stage: "template" | "done";
+  searchRect?: PhysicalRect;
 }
 
 /** Latest request sent to the reusable screenshot viewer. */
@@ -155,6 +194,7 @@ export interface ScreenshotViewRequest {
   pixelId: string;
   x: number;
   y: number;
+  marker?: { kind: "pixel"; x: number; y: number } | { kind: "icon"; searchRect: PhysicalRect; templateRect: PhysicalRect };
   /** Opening point in the viewer's logical viewport coordinates. */
   origin?: { x: number; y: number } | null;
 }

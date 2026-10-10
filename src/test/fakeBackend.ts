@@ -3,6 +3,9 @@ import { actionIsEmpty } from "@/store/types";
 import { delayRangeError } from "@/lib/delayRange";
 import type {
   Action,
+  Icon,
+  IconInput,
+  PhysicalRect,
   ActionSoundInfo,
   AppSettings,
   KeyCodeInfo,
@@ -112,8 +115,8 @@ export function createFakeBackend({
   const missingPart = (tracker: Tracker) => {
     if ((tracker.trigger ?? "pixels") === "hotkey") {
       if (!tracker.hotkey) return "Назначьте сочетание, чтобы запустить отслеживание";
-    } else if (tracker.pixels.length === 0) {
-      return "Добавьте пиксель, чтобы запустить отслеживание";
+    } else if (tracker.pixels.length === 0 && tracker.icons.length === 0) {
+      return "Добавьте пиксель или иконку, чтобы запустить отслеживание";
     }
     if (actionIsEmpty(tracker.action)) {
       return "Добавьте шаг действия, чтобы запустить отслеживание";
@@ -162,6 +165,7 @@ export function createFakeBackend({
           preActionDelayMs: { min: 100, max: 300 },
           resumeDelayMs: 1000,
           pixels: [],
+          icons: [],
           trigger: "pixels",
           hotkey: null,
           action: { type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } },
@@ -282,6 +286,29 @@ export function createFakeBackend({
         Object.assign(pixel, args.input as PixelInput);
         return structuredClone(pixel);
       }
+      case "icon_update": {
+        const icon = findTracker(args.profileId, args.trackerId).icons.find(({ id }) => id === args.iconId);
+        if (!icon) throw new Error("Иконка не найдена");
+        const input = args.input as IconInput;
+        if (!Number.isInteger(input.similarityPercent) || input.similarityPercent < 1 || input.similarityPercent > 100) throw new Error("Введите целое число от 1 до 100");
+        Object.assign(icon, input);
+        return structuredClone(icon);
+      }
+      case "icon_delete": {
+        const tracker = findTracker(args.profileId, args.trackerId);
+        if (!tracker.icons.some(({ id }) => id === args.iconId)) throw new Error("Иконка не найдена");
+        tracker.icons = tracker.icons.filter(({ id }) => id !== args.iconId);
+        stopIfIncomplete(tracker);
+        return null;
+      }
+      case "icon_capture_select": {
+        const rect = args.rect as PhysicalRect;
+        if (rect.width <= 0 || rect.height <= 0) throw new Error("Выделите область перетаскиванием");
+        return args.stage === "search" ? { stage: "template", searchRect: rect } : { stage: "done" };
+      }
+      case "icon_view_open":
+        if (!findTracker(args.profileId, args.trackerId).icons.some(({ id }) => id === args.iconId)) throw new Error("Иконка не найдена");
+        return null;
       case "pixel_delete": {
         const tracker = findTracker(args.profileId, args.trackerId);
         findPixel(args);
@@ -290,6 +317,7 @@ export function createFakeBackend({
         return null;
       }
       case "pixel_capture_start":
+      case "icon_capture_start":
         findTracker(args.profileId, args.trackerId);
         return null;
       case "pixel_capture_cancel":
@@ -399,6 +427,7 @@ export function trackerFixture(overrides: Partial<Tracker> = {}): Tracker {
     preActionDelayMs: { min: 100, max: 300 },
     resumeDelayMs: 1000,
     pixels: [],
+    icons: [],
     trigger: "pixels",
     hotkey: null,
     action: { type: "keySequence", steps: [], sound: { id: null, volumePercent: 50 } },
@@ -425,6 +454,17 @@ export function pixelFixture(overrides: Partial<Pixel> = {}): Pixel {
     color: { r: 200, g: 30, b: 30 },
     condition: "equals",
     tolerancePercent: 10,
+    ...overrides,
+  };
+}
+
+export function iconFixture(overrides: Partial<Icon> = {}): Icon {
+  return {
+    id: "icon-1",
+    searchRect: { x: 20, y: 30, width: 300, height: 80 },
+    templateRect: { x: 40, y: 50, width: 24, height: 24 },
+    condition: "present",
+    similarityPercent: 90,
     ...overrides,
   };
 }

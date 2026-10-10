@@ -7,7 +7,18 @@ use uuid::Uuid;
 
 use super::color::pixel_passes;
 use crate::action::Action;
-use crate::config::{Rgb, Tracker, Trigger};
+use crate::config::{Icon, Rgb, Tracker, Trigger};
+use crate::icon_search::IconResult;
+
+#[derive(Default)]
+pub struct VisualBatch {
+    pub points: Vec<(u32, u32)>,
+    pub icons: Vec<(Uuid, Icon)>,
+}
+pub struct VisualResults {
+    pub colors: Vec<Rgb>,
+    pub icons: Vec<(Uuid, IconResult)>,
+}
 
 /// Action handed to the executor; `ticket` tells this run apart from later runs of the tracker.
 #[derive(Debug, Clone, PartialEq)]
@@ -76,13 +87,13 @@ impl EngineCore {
     /// `None` when the game is not active or the screen is unavailable. While `paused` nothing is
     /// read and no job is queued; elapsed pre-action delays wait for the pause to end.
     /// `process_name` is copied onto every job this tick queues.
-    pub fn tick(
+    pub fn tick_visual(
         &mut self,
         now: Duration,
         paused: bool,
         process_name: &str,
         presses: &[Uuid],
-        read: impl FnOnce(&[(u32, u32)]) -> Option<Vec<Rgb>>,
+        read: impl FnOnce(&VisualBatch) -> Option<VisualResults>,
         rng: &mut impl Rng,
     ) -> Vec<Job> {
         for run in &mut self.runs {
@@ -119,6 +130,31 @@ impl EngineCore {
         jobs
     }
 
+    #[cfg(test)]
+    pub fn tick(
+        &mut self,
+        now: Duration,
+        paused: bool,
+        process_name: &str,
+        presses: &[Uuid],
+        read: impl FnOnce(&[(u32, u32)]) -> Option<Vec<Rgb>>,
+        rng: &mut impl Rng,
+    ) -> Vec<Job> {
+        self.tick_visual(
+            now,
+            paused,
+            process_name,
+            presses,
+            |batch| {
+                read(&batch.points).map(|colors| VisualResults {
+                    colors,
+                    icons: vec![],
+                })
+            },
+            rng,
+        )
+    }
+
     /// A hotkey press enters the same pre-action delay as a pixel match. Presses during a pause,
     /// or while this run is already in the cycle, do nothing.
     pub fn press(&mut self, tracker_id: Uuid, now: Duration, paused: bool, rng: &mut impl Rng) {
@@ -152,30 +188,49 @@ impl EngineCore {
     fn observe(
         &mut self,
         now: Duration,
-        read: impl FnOnce(&[(u32, u32)]) -> Option<Vec<Rgb>>,
+        read: impl FnOnce(&VisualBatch) -> Option<VisualResults>,
         rng: &mut impl Rng,
     ) {
-        let points: Vec<_> = self
-            .polling_pixels()
-            .flat_map(|run| run.tracker.pixels.iter().map(|pixel| (pixel.x, pixel.y)))
-            .collect();
-        if points.is_empty() {
+        let polling: Vec<_> = self.polling_pixels().collect();
+        let batch = VisualBatch {
+            points: polling
+                .iter()
+                .flat_map(|run| run.tracker.pixels.iter().map(|p| (p.x, p.y)))
+                .collect(),
+            icons: polling
+                .iter()
+                .flat_map(|run| {
+                    run.tracker
+                        .icons
+                        .iter()
+                        .cloned()
+                        .map(|icon| (run.tracker.id, icon))
+                })
+                .collect(),
+        };
+        if batch.points.is_empty() && batch.icons.is_empty() {
             return;
         }
-        let Some(colors) = read(&points).filter(|colors| colors.len() == points.len()) else {
+        let Some(results) = read(&batch).filter(|r| r.colors.len() == batch.points.len()) else {
             return;
         };
-
-        let mut colors = colors.into_iter();
+        let mut colors = results.colors.into_iter();
         for run in self.runs.iter_mut().filter(|run| is_pixel_poll(run)) {
             let samples: Vec<_> = colors.by_ref().take(run.tracker.pixels.len()).collect();
-            let all_passed = run
+            let pixels_pass = run
                 .tracker
                 .pixels
                 .iter()
                 .zip(samples)
-                .all(|(pixel, sample)| pixel_passes(sample, pixel));
-            if all_passed {
+                .all(|(p, c)| pixel_passes(c, p));
+            let icons_pass = run.tracker.icons.iter().all(|icon| {
+                results
+                    .icons
+                    .iter()
+                    .find(|(id, _)| *id == icon.id)
+                    .is_some_and(|(_, result)| result.passes(icon))
+            });
+            if pixels_pass && icons_pass {
                 enter_pre_delay(run, now, rng);
             }
         }
@@ -346,6 +401,187 @@ mod tests {
                 .flat_map(|t| self.tick(ms(t)).into_iter().map(move |job| (t, job)))
                 .collect()
         }
+    }
+
+    fn icon(condition: crate::config::IconCondition) -> Icon {
+        Icon {
+            id: Uuid::new_v4(),
+            search_rect: crate::config::PhysicalRect {
+                x: 0,
+                y: 0,
+                width: 3,
+                height: 3,
+            },
+            template_rect: crate::config::PhysicalRect {
+                x: 0,
+                y: 0,
+                width: 1,
+                height: 1,
+            },
+            condition,
+            similarity_percent: 90,
+        }
+    }
+    fn visual_tick(
+        core: &mut EngineCore,
+        now: u64,
+        paused: bool,
+        color: Rgb,
+        scores: &[IconResult],
+        reads: &mut Vec<usize>,
+    ) -> Vec<Job> {
+        core.tick_visual(
+            ms(now),
+            paused,
+            "game.exe",
+            &[],
+            |batch| {
+                reads.push(batch.icons.len());
+                Some(VisualResults {
+                    colors: vec![color; batch.points.len()],
+                    icons: batch
+                        .icons
+                        .iter()
+                        .zip(scores)
+                        .map(|((_, icon), result)| (icon.id, result.clone()))
+                        .collect(),
+                })
+            },
+            &mut StdRng::seed_from_u64(1),
+        )
+    }
+    #[test]
+    fn visual_and_requires_current_pixels_and_every_icon() {
+        let mut tracker = tracker(&[(1, 1)], (0, 0), 0);
+        tracker.icons = vec![
+            icon(crate::config::IconCondition::Present),
+            icon(crate::config::IconCondition::Absent),
+        ];
+        let mut core = EngineCore::default();
+        core.set_trackers(&[tracker]);
+        let mut reads = vec![];
+        assert!(visual_tick(
+            &mut core,
+            0,
+            false,
+            RED,
+            &[IconResult::Similarity(0.0), IconResult::Similarity(0.0)],
+            &mut reads
+        )
+        .is_empty());
+        assert!(visual_tick(
+            &mut core,
+            50,
+            false,
+            BLACK,
+            &[IconResult::Similarity(100.0), IconResult::Similarity(0.0)],
+            &mut reads
+        )
+        .is_empty());
+        assert!(visual_tick(
+            &mut core,
+            100,
+            false,
+            RED,
+            &[
+                IconResult::Similarity(100.0),
+                IconResult::Unavailable("file".into())
+            ],
+            &mut reads
+        )
+        .is_empty());
+        assert_eq!(
+            visual_tick(
+                &mut core,
+                150,
+                false,
+                RED,
+                &[IconResult::Similarity(100.0), IconResult::Similarity(0.0)],
+                &mut reads
+            )
+            .len(),
+            1
+        );
+    }
+    #[test]
+    fn icons_only_updates_next_poll_and_preserves_delay_queue_pause_cooldown() {
+        let mut tracker = tracker(&[], (100, 100), 200);
+        tracker.icons = vec![icon(crate::config::IconCondition::Present)];
+        let mut core = EngineCore::default();
+        core.set_trackers(&[tracker.clone()]);
+        let mut reads = vec![];
+        assert!(visual_tick(
+            &mut core,
+            0,
+            false,
+            BLACK,
+            &[IconResult::Similarity(85.0)],
+            &mut reads
+        )
+        .is_empty());
+        tracker.icons[0].similarity_percent = 80;
+        core.set_trackers(&[tracker.clone()]);
+        assert!(visual_tick(
+            &mut core,
+            50,
+            false,
+            BLACK,
+            &[IconResult::Similarity(85.0)],
+            &mut reads
+        )
+        .is_empty());
+        tracker.icons[0].condition = crate::config::IconCondition::Absent;
+        core.set_trackers(&[tracker]);
+        assert!(visual_tick(&mut core, 150, true, BLACK, &[], &mut reads).is_empty());
+        let jobs = visual_tick(&mut core, 200, false, BLACK, &[], &mut reads);
+        assert_eq!(jobs.len(), 1);
+        assert!(visual_tick(&mut core, 250, false, BLACK, &[], &mut reads).is_empty());
+        core.action_done(jobs[0].ticket, ms(300));
+        assert!(visual_tick(&mut core, 450, false, BLACK, &[], &mut reads).is_empty());
+        assert!(visual_tick(
+            &mut core,
+            500,
+            false,
+            BLACK,
+            &[IconResult::Similarity(100.0)],
+            &mut reads
+        )
+        .is_empty());
+        assert_eq!(reads, vec![1, 1, 1]);
+        assert!(visual_tick(
+            &mut core,
+            550,
+            false,
+            BLACK,
+            &[IconResult::Similarity(0.0)],
+            &mut reads
+        )
+        .is_empty());
+        assert_eq!(
+            visual_tick(&mut core, 650, false, BLACK, &[], &mut reads).len(),
+            1
+        );
+    }
+    #[test]
+    fn hotkey_saved_icons_do_not_poll_and_missing_result_blocks() {
+        let mut tracker = hotkey_tracker((0, 0), 0);
+        tracker.icons = vec![icon(crate::config::IconCondition::Present)];
+        let mut core = EngineCore::default();
+        core.set_trackers(&[tracker.clone()]);
+        let mut reads = vec![];
+        assert!(visual_tick(
+            &mut core,
+            0,
+            false,
+            RED,
+            &[IconResult::Similarity(100.0)],
+            &mut reads
+        )
+        .is_empty());
+        assert!(reads.is_empty());
+        tracker.trigger = Trigger::Pixels;
+        core.set_trackers(&[tracker]);
+        assert!(visual_tick(&mut core, 50, false, RED, &[], &mut reads).is_empty());
     }
 
     #[test]
@@ -812,7 +1048,10 @@ mod tests {
         assert_eq!(jobs[0].1.action, hotkey.action);
 
         h.press(hotkey.id, ms(150));
-        assert!(h.tick(ms(150)).is_empty(), "a press while queued does nothing");
+        assert!(
+            h.tick(ms(150)).is_empty(),
+            "a press while queued does nothing"
+        );
         h.core.action_done(jobs[0].1.ticket, ms(200));
         h.press(hotkey.id, ms(250));
         assert!(
@@ -838,7 +1077,10 @@ mod tests {
         assert!(h.tick(ms(10)).is_empty());
 
         h.core.action_done(first[0].ticket, ms(20));
-        assert!(h.tick(ms(50)).is_empty(), "zero pause returns to waiting for a press");
+        assert!(
+            h.tick(ms(50)).is_empty(),
+            "zero pause returns to waiting for a press"
+        );
         h.press(hotkey.id, ms(50));
         assert_eq!(h.tick(ms(50)).len(), 1);
     }

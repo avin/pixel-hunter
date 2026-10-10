@@ -18,7 +18,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::foreground::{self, WindowHandle};
 use crate::pixel_capture::{
-    CaptureCommand, CaptureEnv, CaptureRequest, CaptureStatus, PixelCapture, STATUS_EVENT,
+    CaptureCommand, CaptureEnv, CaptureMode, CaptureRequest, CaptureStatus, PixelCapture,
+    STATUS_EVENT,
 };
 use crate::screen::{Frame, PrimaryScreen};
 use crate::screenshots;
@@ -38,6 +39,8 @@ const FRAME_FAILED: &str = "Не удалось показать снимок";
 pub struct PickerFrame {
     pub profile_id: Uuid,
     pub pixel_id: Uuid,
+    #[serde(default)]
+    pub mode: CaptureMode,
 }
 
 #[derive(Default)]
@@ -175,10 +178,16 @@ pub fn prepare(app: &AppHandle) -> AppResult<()> {
     }
 }
 
-pub fn publish_frame(app: &AppHandle, profile_id: Uuid, pixel_id: Uuid) -> AppResult<()> {
+pub fn publish_frame(
+    app: &AppHandle,
+    profile_id: Uuid,
+    pixel_id: Uuid,
+    mode: CaptureMode,
+) -> AppResult<()> {
     let frame = PickerFrame {
         profile_id,
         pixel_id,
+        mode,
     };
     app.state::<PickerOverlay>().lock().publish(frame.clone());
     let window = app
@@ -344,9 +353,12 @@ pub async fn picker_frame_drawn(
     pixel_id: Uuid,
 ) -> AppResult<()> {
     validate_window(&window)?;
-    overlay.lock().mark_drawn(&PickerFrame {
+    let mut state = overlay.lock();
+    let mode = state.frame.as_ref().map(|f| f.mode).unwrap_or_default();
+    state.mark_drawn(&PickerFrame {
         profile_id,
         pixel_id,
+        mode,
     });
     Ok(())
 }
@@ -359,9 +371,12 @@ pub async fn picker_frame_failed(
     pixel_id: Uuid,
 ) -> AppResult<()> {
     validate_window(&window)?;
-    overlay.lock().mark_failed(&PickerFrame {
+    let mut state = overlay.lock();
+    let mode = state.frame.as_ref().map(|f| f.mode).unwrap_or_default();
+    state.mark_failed(&PickerFrame {
         profile_id,
         pixel_id,
+        mode,
     });
     Ok(())
 }
@@ -435,7 +450,7 @@ impl CaptureEnv for TauriCaptureEnv {
     }
 
     fn publish_frame(&self, request: CaptureRequest, pixel_id: Uuid) -> AppResult<()> {
-        publish_frame(&self.app, request.profile_id, pixel_id)
+        publish_frame(&self.app, request.profile_id, pixel_id, request.mode)
     }
 
     fn frame_result(&self) -> Option<AppResult<()>> {
@@ -478,6 +493,7 @@ mod tests {
         PickerFrame {
             profile_id: Uuid::new_v4(),
             pixel_id: Uuid::new_v4(),
+            mode: CaptureMode::Pixel,
         }
     }
 
