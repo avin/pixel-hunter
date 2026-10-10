@@ -159,6 +159,7 @@ mod tests {
             steps: vec![KeyStep {
                 id: Uuid::new_v4(),
                 delay_before_ms: None,
+                hold_ms: crate::action::DEFAULT_STEP_HOLD_MS,
                 combo: KeyCombo {
                     modifiers: vec![],
                     key: "KeyQ".into(),
@@ -175,6 +176,10 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("sound");
+        json["profiles"][0]["trackers"][0]["action"]["steps"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("holdMs");
         fs::write(
             dir.path().join(CONFIG_FILE),
             serde_json::to_vec(&json).unwrap(),
@@ -187,6 +192,10 @@ mod tests {
             .read(|config| config.profiles[0].trackers[0].clone());
         assert_eq!(restored, tracker);
         assert_eq!(restored.action.sound, SoundSettings::default());
+        let crate::action::ActionKind::KeySequence(sequence) = &restored.action.kind else {
+            unreachable!()
+        };
+        assert_eq!(sequence.steps[0].hold_ms, crate::action::DEFAULT_STEP_HOLD_MS);
         loaded.store.update(|_| Ok(())).unwrap();
         assert_eq!(
             ConfigStore::load(dir.path())

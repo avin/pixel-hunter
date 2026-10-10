@@ -1,5 +1,6 @@
 import { mockIPC } from "@tauri-apps/api/mocks";
 import { actionIsEmpty } from "@/store/types";
+import { delayRangeError } from "@/lib/delayRange";
 import type {
   Action,
   ActionSoundInfo,
@@ -186,6 +187,12 @@ export function createFakeBackend({
         const tracker = findTracker(args.profileId, args.trackerId);
         const action = structuredClone(args.action as Action);
         validateSound(action.sound.id, action.sound.volumePercent);
+        if (action.type === "keySequence") {
+          for (const step of action.steps) {
+            const error = delayRangeError(String(step.holdMs.min), String(step.holdMs.max));
+            if (error) throw new Error(error);
+          }
+        }
         if (action.type === "keySequence" && action.steps[0]) action.steps[0].delayBeforeMs = null;
         tracker.action = action;
         stopIfIncomplete(tracker);
@@ -404,6 +411,7 @@ export function keyStepFixture(overrides: Partial<KeyStep> = {}): KeyStep {
   return {
     id: "step-1",
     delayBeforeMs: null,
+    holdMs: { min: 40, max: 90 },
     combo: { modifiers: [], key: "KeyQ" },
     ...overrides,
   };

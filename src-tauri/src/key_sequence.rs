@@ -8,7 +8,6 @@ use crate::action::{KeySequenceAction, KeyStep};
 use crate::error::{AppError, AppResult};
 use crate::key_codes::{self, KeyDef};
 
-const HOLD_MS: (u64, u64) = (40, 90);
 /// Between modifier presses, the last modifier and the key, and between releases.
 const MODIFIER_GAP_MS: (u64, u64) = (15, 35);
 
@@ -75,7 +74,8 @@ fn press_combo(
         clock.sleep(bell(rng, MODIFIER_GAP_MS));
     }
     input.send(event(key, false));
-    clock.sleep(bell(rng, HOLD_MS));
+    // The step controls the main key's hold; modifier gaps keep their own timing.
+    clock.sleep(bell(rng, (step.hold_ms.min.into(), step.hold_ms.max.into())));
     input.send(event(key, true));
     for modifier in modifiers.iter().rev() {
         clock.sleep(bell(rng, MODIFIER_GAP_MS));
@@ -176,6 +176,7 @@ mod tests {
         KeyStep {
             id: Uuid::new_v4(),
             delay_before_ms: delay.map(|(min, max)| DelayRange { min, max }),
+            hold_ms: crate::action::DEFAULT_STEP_HOLD_MS,
             combo: KeyCombo {
                 modifiers,
                 key: key.into(),
@@ -249,6 +250,71 @@ mod tests {
             "{holds:?}"
         );
         assert!(holds.iter().any(|hold| *hold != holds[0]));
+    }
+
+    #[test]
+    fn holds_each_step_within_its_own_range() {
+        let mut action = sequence(vec![
+            step("KeyQ", vec![], None),
+            step("KeyW", vec![], Some((300, 600))),
+        ]);
+        action.steps[0].hold_ms = DelayRange { min: 1000, max: 1500 };
+        action.steps[1].hold_ms = DelayRange { min: 200, max: 300 };
+        for seed in 0..100 {
+            let entries = Recorder::run(&action, seed);
+            assert!((1000..=1500).contains(&time_between(&entries, 0, 1).as_millis()));
+            assert!((200..=300).contains(&time_between(&entries, 2, 3).as_millis()));
+        }
+    }
+
+    #[test]
+    fn fixed_and_zero_holds_are_exact() {
+        for hold in [0, 1200] {
+            let mut action = sequence(vec![step("KeyQ", vec![], None)]);
+            action.steps[0].hold_ms = DelayRange { min: hold, max: hold };
+            for seed in 0..10 {
+                assert_eq!(
+                    time_between(&Recorder::run(&action, seed), 0, 1),
+                    Duration::from_millis(hold.into())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn releases_all_modifiers_before_the_next_step_delay() {
+        let mut action = sequence(vec![
+            step(
+                "Digit1",
+                vec![Modifier::Ctrl, Modifier::Shift, Modifier::Alt],
+                None,
+            ),
+            step("KeyW", vec![], Some((600, 600))),
+        ]);
+        action.steps[0].hold_ms = DelayRange { min: 1200, max: 1200 };
+        action.steps[1].hold_ms = DelayRange { min: 0, max: 0 };
+        let entries = Recorder::run(&action, 1);
+        assert_eq!(
+            keys(&entries),
+            [
+                (0x1D, DOWN),
+                (0x2A, DOWN),
+                (0x38, DOWN),
+                (0x02, DOWN),
+                (0x02, UP),
+                (0x38, UP),
+                (0x2A, UP),
+                (0x1D, UP),
+                (0x11, DOWN),
+                (0x11, UP),
+            ]
+        );
+        assert_eq!(time_between(&entries, 3, 4), Duration::from_millis(1200));
+        for (from, to) in [(0, 1), (1, 2), (2, 3), (4, 5), (5, 6), (6, 7)] {
+            assert!((15..=35).contains(&time_between(&entries, from, to).as_millis()));
+        }
+        assert_eq!(time_between(&entries, 7, 8), Duration::from_millis(600));
+        assert_eq!(time_between(&entries, 8, 9), Duration::ZERO);
     }
 
     #[test]

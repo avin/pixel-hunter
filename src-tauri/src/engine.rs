@@ -629,6 +629,7 @@ mod tests {
             steps: vec![crate::action::KeyStep {
                 id: Uuid::new_v4(),
                 delay_before_ms: None,
+                hold_ms: crate::action::DEFAULT_STEP_HOLD_MS,
                 combo: KeyCombo {
                     modifiers: vec![Modifier::Ctrl],
                     key: "Tab".into(),

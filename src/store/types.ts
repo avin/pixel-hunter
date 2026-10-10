@@ -48,6 +48,7 @@ export interface KeyCombo {
 export interface KeyStep {
   id: string;
   delayBeforeMs: DelayRange | null;
+  holdMs: DelayRange;
   combo: KeyCombo;
 }
 

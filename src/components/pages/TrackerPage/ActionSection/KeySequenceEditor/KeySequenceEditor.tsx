@@ -57,7 +57,7 @@ export function KeySequenceEditor({ action, onChange }: Props) {
 
   function addStep(combo: KeyCombo) {
     const delayBeforeMs = steps.length > 0 ? { ...DEFAULT_STEP_DELAY_MS } : null;
-    save([...steps, { id: crypto.randomUUID(), delayBeforeMs, combo }]);
+    save([...steps, { id: crypto.randomUUID(), delayBeforeMs, holdMs: { min: 40, max: 90 }, combo }]);
   }
 
   function deleteStep(index: number) {
@@ -81,7 +81,7 @@ export function KeySequenceEditor({ action, onChange }: Props) {
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-hidden [&>div]:h-full [&>div]:overflow-auto">
-          <Table aria-label="Шаги последовательности" className="min-w-[560px] text-xs [&_td]:py-1 [&_th]:h-8">
+          <Table aria-label="Шаги последовательности" className="min-w-[768px] text-xs [&_td]:py-1 [&_th]:h-8">
             <TableHeader className="sticky top-0 z-10 bg-background">
               <TableRow>
                 <TableHead className="w-10">№</TableHead>
@@ -91,6 +91,14 @@ export function KeySequenceEditor({ action, onChange }: Props) {
                     Задержка, мс
                     <FieldInfo label="Задержка перед нажатием">
                       Перед каждым нажатием, кроме первого, выдерживается случайная пауза из этого диапазона.
+                    </FieldInfo>
+                  </span>
+                </TableHead>
+                <TableHead className="w-52">
+                  <span className="inline-flex items-center gap-1">
+                    Удержание, мс
+                    <FieldInfo label="Удержание клавиши">
+                      Основная клавиша удерживается до отпускания в течение случайного времени из этого диапазона. Модификаторы остаются нажатыми вместе с ней.
                     </FieldInfo>
                   </span>
                 </TableHead>

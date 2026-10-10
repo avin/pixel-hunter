@@ -104,6 +104,7 @@ mod tests {
                     id: Uuid::new_v4(),
                     delay_before_ms: (index > 0)
                         .then_some(crate::config::DelayRange { min: 0, max: 0 }),
+                    hold_ms: crate::action::DEFAULT_STEP_HOLD_MS,
                     combo: KeyCombo {
                         modifiers: vec![],
                         key: (*key).into(),
@@ -414,7 +415,12 @@ mod tests {
     #[test]
     fn a_started_action_finishes_during_pause_and_the_next_waits() {
         let (sender, receiver) = mpsc::channel();
-        sender.send(job(1, keys(&["KeyQ", "KeyW"]))).unwrap();
+        let mut action = keys(&["KeyQ", "KeyW"]);
+        let ActionKind::KeySequence(sequence) = &mut action.kind else {
+            unreachable!()
+        };
+        sequence.steps[0].hold_ms = crate::config::DelayRange { min: 2500, max: 2500 };
+        sender.send(job(1, action)).unwrap();
         sender.send(job(2, keys(&["KeyE"]))).unwrap();
         drop(sender);
         let paused = AtomicBool::new(false);

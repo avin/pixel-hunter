@@ -640,6 +640,7 @@ mod tests {
                 .map(|(key, delay)| KeyStep {
                     id: Uuid::new_v4(),
                     delay_before_ms: *delay,
+                    hold_ms: crate::action::DEFAULT_STEP_HOLD_MS,
                     combo: KeyCombo {
                         modifiers: vec![],
                         key: (*key).into(),
@@ -665,12 +666,18 @@ mod tests {
         let profile = fixture.profile("Diablo");
         let tracker = create_tracker(&fixture.store, profile.id, "Здоровье".into()).unwrap();
         let delay = Some(DelayRange { min: 300, max: 600 });
+        let mut action = key_sequence(&[("KeyW", delay), ("KeyE", delay)]);
+        let ActionKind::KeySequence(sequence) = &mut action.kind else {
+            unreachable!()
+        };
+        sequence.steps[0].hold_ms = DelayRange { min: 2000, max: 3000 };
+        sequence.steps[1].hold_ms = DelayRange { min: 100, max: 200 };
 
         let saved = update_action(
             &fixture.store,
             profile.id,
             tracker.id,
-            key_sequence(&[("KeyW", delay), ("KeyE", delay)]),
+            action,
         )
         .unwrap();
 
@@ -679,7 +686,41 @@ mod tests {
         };
         assert_eq!(sequence.steps[0].delay_before_ms, None);
         assert_eq!(sequence.steps[1].delay_before_ms, delay);
+        assert_eq!(
+            sequence.steps[0].hold_ms,
+            DelayRange { min: 2000, max: 3000 }
+        );
+        assert_eq!(sequence.steps[1].hold_ms, DelayRange { min: 100, max: 200 });
         assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
+    }
+
+    #[test]
+    fn invalid_hold_update_keeps_memory_and_disk_unchanged() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Diablo");
+        let (tracker, _) = complete_tracker(&fixture, profile.id);
+        let saved = get_action(&fixture.store, profile.id, tracker.id).unwrap();
+        let bytes = fs::read(fixture.dir.path().join("config.json")).unwrap();
+        let mut action = saved.clone();
+        let ActionKind::KeySequence(sequence) = &mut action.kind else {
+            unreachable!()
+        };
+        sequence.steps[0].hold_ms = DelayRange { min: 3000, max: 2000 };
+        assert_validation_error(update_action(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            action,
+        ));
+        assert_eq!(
+            get_action(&fixture.store, profile.id, tracker.id).unwrap(),
+            saved
+        );
+        assert_eq!(fixture.reloaded()[0].trackers[0].action, saved);
+        assert_eq!(
+            fs::read(fixture.dir.path().join("config.json")).unwrap(),
+            bytes
+        );
     }
 
     #[test]

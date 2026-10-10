@@ -6,6 +6,11 @@ use crate::error::{AppError, AppResult};
 use crate::key_codes;
 
 pub const DEFAULT_STEP_DELAY_MS: DelayRange = DelayRange { min: 300, max: 600 };
+pub const DEFAULT_STEP_HOLD_MS: DelayRange = DelayRange { min: 40, max: 90 };
+
+fn default_step_hold_ms() -> DelayRange {
+    DEFAULT_STEP_HOLD_MS
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Action {
@@ -120,6 +125,7 @@ impl KeySequenceAction {
             if let Some(delay) = &step.delay_before_ms {
                 delay.validate()?;
             }
+            step.hold_ms.validate()?;
         }
         Ok(())
     }
@@ -130,6 +136,8 @@ impl KeySequenceAction {
 pub struct KeyStep {
     pub id: Uuid,
     pub delay_before_ms: Option<DelayRange>,
+    #[serde(default = "default_step_hold_ms")]
+    pub hold_ms: DelayRange,
     pub combo: KeyCombo,
 }
 
@@ -228,6 +236,7 @@ mod tests {
         KeyStep {
             id: Uuid::new_v4(),
             delay_before_ms: delay,
+            hold_ms: DEFAULT_STEP_HOLD_MS,
             combo: KeyCombo {
                 modifiers,
                 key: key.into(),
@@ -257,10 +266,11 @@ mod tests {
                 "type": "keySequence",
                 "sound": { "id": null, "volumePercent": 50 },
                 "steps": [
-                    { "id": first.id, "delayBeforeMs": null, "combo": { "modifiers": [], "key": "KeyQ" } },
+                    { "id": first.id, "delayBeforeMs": null, "holdMs": { "min": 40, "max": 90 }, "combo": { "modifiers": [], "key": "KeyQ" } },
                     {
                         "id": second.id,
                         "delayBeforeMs": { "min": 300, "max": 600 },
+                        "holdMs": { "min": 40, "max": 90 },
                         "combo": { "modifiers": ["ctrl"], "key": "Digit1" },
                     },
                 ],
@@ -275,11 +285,65 @@ mod tests {
             step("KeyQ", vec![], None),
             step("KeyW", vec![], Some(DelayRange { min: 300, max: 600 })),
         ]);
+        action.steps[1].hold_ms = DelayRange { min: 1000, max: 1500 };
 
         action.steps.remove(0);
         action.normalize();
 
         assert_eq!(action.steps[0].delay_before_ms, None);
+        assert_eq!(
+            action.steps[0].hold_ms,
+            DelayRange { min: 1000, max: 1500 }
+        );
+    }
+
+    #[test]
+    fn validates_hold_range_boundaries() {
+        for (min, max) in [
+            (0, 0),
+            (1200, 1200),
+            (2000, 3000),
+            (0, u32::MAX),
+            (u32::MAX, u32::MAX),
+        ] {
+            let mut action = sequence(vec![step("KeyQ", vec![], None)]);
+            action.steps[0].hold_ms = DelayRange { min, max };
+            assert!(action.validate().is_ok());
+        }
+        let mut action = sequence(vec![step("KeyQ", vec![], None)]);
+        action.steps[0].hold_ms = DelayRange { min: 3000, max: 2000 };
+        assert!(matches!(action.validate(), Err(AppError::Validation(_))));
+    }
+
+    #[test]
+    fn reads_missing_and_explicit_hold_ranges() {
+        let mut value = json!({
+            "id": Uuid::new_v4(), "delayBeforeMs": null,
+            "combo": { "modifiers": [], "key": "KeyQ" }
+        });
+        let old_step: KeyStep = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(old_step.hold_ms, DEFAULT_STEP_HOLD_MS);
+        value["holdMs"] = json!({ "min": 2000, "max": 3000 });
+        let explicit: KeyStep = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            explicit.hold_ms,
+            DelayRange { min: 2000, max: 3000 }
+        );
+        assert_eq!(
+            serde_json::to_value(explicit).unwrap()["holdMs"],
+            value["holdMs"]
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_hold_boundaries_in_json() {
+        for boundary in [json!(-1), json!(40.5), json!(4294967296_u64)] {
+            for field in ["min", "max"] {
+                let mut value = serde_json::to_value(step("KeyQ", vec![], None)).unwrap();
+                value["holdMs"][field] = boundary.clone();
+                assert!(serde_json::from_value::<KeyStep>(value).is_err());
+            }
+        }
     }
 
     #[test]

@@ -7,9 +7,9 @@ import { delayRangeError } from "@/lib/delayRange";
 import type { DelayRange } from "@/store/types";
 
 interface Props {
-  stepNumber: number;
-  delay: DelayRange;
-  onSave: (delay: DelayRange) => void;
+  label: string;
+  range: DelayRange;
+  onSave: (range: DelayRange) => void;
 }
 
 interface Values {
@@ -23,8 +23,8 @@ function validateDelay(values: Readonly<Values>) {
   return { delay: delayRangeError(values.min, values.max) };
 }
 
-export function StepDelay({ stepNumber, delay, onSave }: Props) {
-  const form = useForm<Values>({ min: String(delay.min), max: String(delay.max) });
+export function StepDelay({ label, range, onSave }: Props) {
+  const form = useForm<Values>({ min: String(range.min), max: String(range.max) });
   const values = useFormWatch(form);
   const { errors } = useFormValidation(form, validateDelay);
   const reveal = useErrorReveal<"delay">();
@@ -34,11 +34,11 @@ export function StepDelay({ stepNumber, delay, onSave }: Props) {
   function save() {
     const { min, max } = form.values;
     if (validateDelay(form.values).delay) return;
-    if (Number(min) === delay.min && Number(max) === delay.max) return;
+    if (Number(min) === range.min && Number(max) === range.max) return;
     onSave({ min: Number(min), max: Number(max) });
   }
 
-  function input(field: keyof Values, label: string) {
+  function input(field: keyof Values, bound: string) {
     return (
       <Input
         type="number"
@@ -46,7 +46,7 @@ export function StepDelay({ stepNumber, delay, onSave }: Props) {
         min={0}
         step={1}
         value={values[field]}
-        aria-label={`Задержка перед шагом ${stepNumber}: ${label}, мс`}
+        aria-label={`${label}: ${bound}, мс`}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? errorId : undefined}
         className="h-7 w-20"
@@ -73,7 +73,7 @@ export function StepDelay({ stepNumber, delay, onSave }: Props) {
         }
       }}
     >
-      <legend className="sr-only">Задержка перед шагом {stepNumber}, мс</legend>
+      <legend className="sr-only">{label}, мс</legend>
       <div className="flex items-center gap-2 text-xs">
         {input("min", "минимум")}
         <span aria-hidden className="font-mono text-muted-foreground">–</span>

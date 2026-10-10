@@ -36,13 +36,20 @@ export function StepRow({
       <TableCell>
         {step.delayBeforeMs ? (
           <StepDelay
-            stepNumber={stepNumber}
-            delay={step.delayBeforeMs}
+            label={`Задержка перед шагом ${stepNumber}`}
+            range={step.delayBeforeMs}
             onSave={(delayBeforeMs) => onChange({ ...step, delayBeforeMs })}
           />
         ) : (
           <span aria-label="Без задержки" className="text-muted-foreground">—</span>
         )}
+      </TableCell>
+      <TableCell>
+        <StepDelay
+          label={`Удержание шага ${stepNumber}`}
+          range={step.holdMs}
+          onSave={(holdMs) => onChange({ ...step, holdMs })}
+        />
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">
