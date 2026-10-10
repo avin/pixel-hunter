@@ -27,7 +27,7 @@ interface Props {
 }
 
 const TRIGGER_LABELS: Record<Trigger, string> = {
-  pixels: "Пиксели",
+  pixels: "Визуальное",
   hotkey: "Хоткей",
 };
 
@@ -83,7 +83,7 @@ interface HeaderProps extends Props {
 
 export function ConditionHeader({ profileId, tracker, children }: HeaderProps) {
   return (
-    <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
       <ConditionSelect profileId={profileId} tracker={tracker} />
       {children}
     </div>

@@ -443,7 +443,7 @@ describe("TrackerPage", () => {
     await user.click(screen.getByRole("button", { name: "Создать отслеживание" }));
     expect(await screen.findByRole("textbox", { name: "Имя" })).toHaveValue("Без названия");
 
-    expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Пиксели");
+    expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Визуальное");
     expect(screen.queryByRole("heading", { name: "Пиксели" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Добавить пиксель" })).toBeInTheDocument();
 
@@ -453,8 +453,8 @@ describe("TrackerPage", () => {
     }));
     await saved.user.click(await screen.findByRole("link", { name: "Diablo" }));
     await saved.user.click(screen.getByRole("link", { name: "Здоровье" }));
-    expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Пиксели");
-    expect(screen.getByRole("table", { name: "Пиксели" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Условие" })).toHaveTextContent("Визуальное");
+    expect(screen.getByRole("table", { name: "Визуальные условия" })).toBeInTheDocument();
   });
 
   it("hides pixel capture for a hotkey and shows the same pixels again", async () => {
@@ -465,15 +465,15 @@ describe("TrackerPage", () => {
     await user.click(await screen.findByRole("option", { name: "Хоткей" }));
 
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].trigger).toBe("hotkey"));
-    expect(screen.queryByRole("table", { name: "Пиксели" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("table", { name: "Визуальные условия" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Добавить пиксель" })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Хоткей" })).not.toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Хоткей" })).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Назначить" })).toBeInTheDocument();
 
     await user.click(screen.getByRole("combobox", { name: "Условие" }));
-    await user.click(await screen.findByRole("option", { name: "Пиксели" }));
-    expect(await screen.findByRole("table", { name: "Пиксели" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("option", { name: "Визуальное" }));
+    expect(await screen.findByRole("table", { name: "Визуальные условия" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Добавить пиксель" })).toBeInTheDocument();
     expect(backend.state.profiles[0].trackers[0].pixels).toEqual([pixelFixture()]);
   });

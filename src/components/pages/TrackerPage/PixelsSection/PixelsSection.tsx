@@ -3,9 +3,6 @@ import { Button } from "@/components/ui/button";
 import {
   Table,
   TableBody,
-  TableHead,
-  TableHeader,
-  TableRow,
 } from "@/components/ui/table";
 import { ConditionHeader } from "@/components/pages/TrackerPage/ConditionSection/ConditionSection";
 import {
@@ -54,10 +51,12 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
   );
 
   return (
-    <section aria-label="Пиксели" className="flex min-h-0 min-w-0 flex-1 flex-col border">
+    <section aria-label="Визуальное" className="flex min-h-0 min-w-0 flex-1 flex-col border">
       <ConditionHeader profileId={profileId} tracker={tracker}>
-        {addButton}
-        <Button size="sm" disabled={isCapturing} onClick={() => void startIconCapture({ profileId, trackerId: tracker.id })}><ScanSearch />Добавить иконку</Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {addButton}
+          <Button size="sm" disabled={isCapturing} onClick={() => void startIconCapture({ profileId, trackerId: tracker.id })}><ScanSearch />Добавить иконку</Button>
+        </div>
       </ConditionHeader>
 
       {status && (
@@ -79,19 +78,7 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
         </div>
       ) : (
         <div className="min-h-0 flex-1 overflow-auto">
-          {tracker.pixels.length > 0 && <Table aria-label="Пиксели" className="min-w-[560px] text-xs [&_td]:py-1 [&_th]:h-8">
-            <TableHeader className="sticky top-0 z-10 bg-background">
-              <TableRow>
-                <TableHead className="w-20">Снимок</TableHead>
-                <TableHead className="w-28">Координаты</TableHead>
-                <TableHead className="w-28">Цвет</TableHead>
-                <TableHead className="w-32">Условие</TableHead>
-                <TableHead className="w-24">Допуск, %</TableHead>
-                <TableHead className="w-10">
-                  <span className="sr-only">Действия</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
+          <Table aria-label="Визуальные условия" className="min-w-[640px] text-xs [&_td]:py-2">
             <TableBody>
               {tracker.pixels.map((pixel) => (
                 <PixelRow
@@ -102,17 +89,19 @@ export function PixelsSection({ profileId, processName, tracker }: Props) {
                   screenshotsDir={screenshotsDir}
                 />
               ))}
+              {tracker.icons.map((icon) => (
+                <IconRow
+                  key={icon.id}
+                  profileId={profileId}
+                  trackerId={tracker.id}
+                  icon={icon}
+                  screenshotsDir={screenshotsDir}
+                />
+              ))}
             </TableBody>
-          </Table>}
-          {tracker.icons.length > 0 && <Table aria-label="Иконки" className="min-w-[560px] text-xs [&_td]:py-1 [&_th]:h-8">
-            <TableHeader className="sticky top-0 z-10 bg-background"><TableRow>
-              <TableHead className="w-20">Снимок</TableHead><TableHead>Образец</TableHead><TableHead>Условие</TableHead><TableHead>Сходство, %</TableHead><TableHead><span className="sr-only">Действия</span></TableHead>
-            </TableRow></TableHeader>
-            <TableBody>{tracker.icons.map((icon) => <IconRow key={icon.id} profileId={profileId} trackerId={tracker.id} icon={icon} screenshotsDir={screenshotsDir} />)}</TableBody>
-          </Table>}
+          </Table>
         </div>
       )}
-      <p className="shrink-0 border-t px-3 py-2 text-xs text-muted-foreground">Все пиксели и иконки проверяются вместе (AND). Иконка ищется в выбранной области в сохранённом размере, без масштабирования и поворота. Порог сходства 1–100% — техническая оценка, не вероятность распознавания.</p>
     </section>
   );
 }

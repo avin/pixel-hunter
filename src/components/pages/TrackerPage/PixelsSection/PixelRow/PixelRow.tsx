@@ -59,6 +59,7 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
   const reveal = useErrorReveal<"tolerance">();
   const toleranceError = reveal.visibleError(errors, "tolerance");
   const toleranceErrorId = useId();
+  const toleranceId = useId();
 
   const [hasThumbnailError, setHasThumbnailError] = useState(false);
   const [updatePixel] = usePixelUpdateMutation();
@@ -78,7 +79,7 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
 
   return (
     <TableRow>
-      <TableCell>
+      <TableCell className="w-20">
         {screenshotsDir && !hasThumbnailError ? (
           <button
             type="button"
@@ -109,20 +110,10 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
           </div>
         )}
       </TableCell>
-      <TableCell className="font-mono tabular-nums">
-        {pixel.x}, {pixel.y}
+      <TableCell className="w-20" title={`Пиксель ${point}`}>
+        Пиксель
       </TableCell>
-      <TableCell>
-        <div className="flex items-center gap-2">
-          <span
-            aria-hidden
-            className="size-4 shrink-0 rounded-sm border"
-            style={{ backgroundColor: hex }}
-          />
-          <span className="font-mono text-xs">{hex}</span>
-        </div>
-      </TableCell>
-      <TableCell>
+      <TableCell className="w-32">
         <Select
           items={CONDITION_LABELS}
           value={pixel.condition}
@@ -135,10 +126,15 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
             }
           }}
         >
-          <SelectTrigger size="sm" className="w-28" aria-label={`Условие пикселя ${point}`}>
-            <SelectValue />
+          <SelectTrigger size="sm" aria-label={`Условие пикселя ${point}`}>
+            <span className="grid">
+              {Object.values(CONDITION_LABELS).map((label) => (
+                <span key={label} aria-hidden className="invisible col-start-1 row-start-1">{label}</span>
+              ))}
+              <SelectValue className="col-start-1 row-start-1" />
+            </span>
           </SelectTrigger>
-          <SelectContent alignItemWithTrigger={false}>
+          <SelectContent alignItemWithTrigger={false} className="min-w-0">
             {Object.entries(CONDITION_LABELS).map(([value, label]) => (
               <SelectItem key={value} value={value}>
                 {label}
@@ -148,35 +144,48 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
         </Select>
       </TableCell>
       <TableCell>
+        <div className="flex items-center gap-2">
+          <span aria-hidden className="size-5 shrink-0 rounded-sm border" style={{ backgroundColor: hex }} />
+          <span className="font-mono text-xs">{hex}</span>
+        </div>
+      </TableCell>
+      <TableCell>
         <div>
-          <Input
-            type="number"
-            inputMode="numeric"
-            min={0}
-            max={100}
-            step={1}
-            value={tolerance}
-            aria-label={`Допуск пикселя ${point}, %`}
-            aria-invalid={toleranceError ? true : undefined}
-            aria-describedby={toleranceError ? toleranceErrorId : undefined}
-            className="h-7 w-20"
-            onChange={(event) => {
-              form.setValue("tolerance", event.currentTarget.value);
-              reveal.change("tolerance");
-            }}
-            onBlur={() => {
-              reveal.blur("tolerance", validateTolerance(form.values));
-              saveTolerance();
-            }}
-            onKeyDown={(event) => {
-              if (
-                event.key === "Enter" &&
-                !reveal.submit(validateTolerance(form.values), FIELDS)
-              ) {
-                saveTolerance();
-              }
-            }}
-          />
+          <div className="flex items-center justify-end gap-2">
+            <label htmlFor={toleranceId}>Допуск:</label>
+            <div className="relative">
+              <Input
+                id={toleranceId}
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={100}
+                step={1}
+                value={tolerance}
+                aria-label={`Допуск пикселя ${point}, %`}
+                aria-invalid={toleranceError ? true : undefined}
+                aria-describedby={toleranceError ? toleranceErrorId : undefined}
+                className="h-7 w-20 pr-6 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+                onChange={(event) => {
+                  form.setValue("tolerance", event.currentTarget.value);
+                  reveal.change("tolerance");
+                }}
+                onBlur={() => {
+                  reveal.blur("tolerance", validateTolerance(form.values));
+                  saveTolerance();
+                }}
+                onKeyDown={(event) => {
+                  if (
+                    event.key === "Enter" &&
+                    !reveal.submit(validateTolerance(form.values), FIELDS)
+                  ) {
+                    saveTolerance();
+                  }
+                }}
+              />
+              <span aria-hidden className="pointer-events-none absolute inset-y-0 right-2 flex items-center">%</span>
+            </div>
+          </div>
           {toleranceError && (
             <FieldError id={toleranceErrorId} className="mt-1 max-w-40 whitespace-normal">
               {toleranceError}
@@ -184,7 +193,7 @@ export function PixelRow({ profileId, trackerId, pixel, screenshotsDir }: Props)
           )}
         </div>
       </TableCell>
-      <TableCell>
+      <TableCell className="w-10">
         <div className="flex justify-end">
           <Button
             variant="ghost"

@@ -133,7 +133,7 @@ export function KeySequenceEditor({ action, onChange }: Props) {
 
       <div className="shrink-0 border-t pt-2">
         <KeyRecorder
-          variant="outline"
+          variant="default"
           size="sm"
           supportedCodes={supportedCodes}
           onRecord={addStep}

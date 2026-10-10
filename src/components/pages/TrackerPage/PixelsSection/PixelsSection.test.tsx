@@ -34,7 +34,7 @@ const addIconButton = () => screen.getByRole("button", { name: "Добавить
 const iconCondition = () => screen.getByRole("combobox", { name: "Условие иконки (40, 50)" });
 const iconThreshold = () => screen.getByRole("spinbutton", { name: "Сходство иконки (40, 50), %" });
 const row = (point: string) =>
-  screen.getByRole("cell", { name: point }).closest("tr") as HTMLElement;
+  screen.getByRole("combobox", { name: `Условие пикселя (${point})` }).closest("tr") as HTMLElement;
 const conditionSelect = (point = "(812, 1040)") =>
   screen.getByRole("combobox", { name: `Условие пикселя ${point}` });
 const toleranceInput = (point = "(812, 1040)") =>
@@ -76,7 +76,7 @@ describe("Pixel capture on TrackerPage", () => {
     backend.state.profiles[0].trackers[0].pixels.push(pixelFixture());
     await emitStatus({ phase: "done" });
 
-    expect(await screen.findByRole("cell", { name: "812, 1040" })).toBeInTheDocument();
+    expect(await screen.findByRole("combobox", { name: "Условие пикселя (812, 1040)" })).toBeInTheDocument();
     expect(conditionSelect()).toHaveTextContent("Равно");
     expect(toleranceInput()).toHaveValue(10);
     expect(screen.queryByRole("status", { name: "Состояние захвата" })).not.toBeInTheDocument();
@@ -156,8 +156,16 @@ describe("Pixel table on TrackerPage", () => {
     tolerancePercent: 0,
   });
 
-  it("lists every pixel with its thumbnail, color, condition and tolerance", async () => {
-    await openTracker([pixelFixture(), secondPixel]);
+  it("lists pixels and icons together without column headings", async () => {
+    await openTracker([pixelFixture(), secondPixel], [iconFixture()]);
+
+    const table = screen.getByRole("table", { name: "Визуальные условия" });
+    expect(screen.getAllByRole("table")).toHaveLength(1);
+    expect(within(table).queryByRole("columnheader")).not.toBeInTheDocument();
+    expect(within(table).getAllByRole("cell", { name: "Пиксель" })).toHaveLength(2);
+    expect(within(table).getByRole("cell", { name: "Иконка" })).toBeInTheDocument();
+    expect(iconCondition()).toHaveTextContent("Должна быть");
+    expect(iconThreshold()).toHaveValue(90);
 
     const first = row("812, 1040");
     const thumbnail = within(first).getByRole("button", {
@@ -297,9 +305,9 @@ describe("Pixel table on TrackerPage", () => {
     await user.click(screen.getByRole("button", { name: "Удалить пиксель (812, 1040)" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("cell", { name: "812, 1040" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("combobox", { name: "Условие пикселя (812, 1040)" })).not.toBeInTheDocument(),
     );
-    expect(screen.getByRole("cell", { name: "10, 20" })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Условие пикселя (10, 20)" })).toBeInTheDocument();
     expect(backend.callsOf("pixel_delete")).toEqual([
       { profileId: "profile-1", trackerId: "tracker-1", pixelId: "pixel-1" },
     ]);
@@ -336,7 +344,7 @@ describe("Icon conditions on TrackerPage", () => {
     const { user, backend } = await openTracker([], [iconFixture()]);
     expect(screen.queryByText("Пикселей и иконок пока нет")).not.toBeInTheDocument();
     expect(iconThreshold()).toHaveValue(90);
-    expect(iconCondition()).toHaveTextContent("Иконка должна быть");
+    expect(iconCondition()).toHaveTextContent("Должна быть");
     await user.pointer({ keys: "[MouseLeft]", target: screen.getByRole("button", { name: "Открыть снимок иконки (40, 50)" }), coords: { clientX: 120, clientY: 240 } });
     expect(backend.callsOf("icon_view_open")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1", iconId: "icon-1", origin: { x: 120, y: 240 } }]);
   });
@@ -350,7 +358,7 @@ describe("Icon conditions on TrackerPage", () => {
     await user.clear(minimum);
     await user.type(minimum, "125");
     await user.click(iconCondition());
-    await user.click(await screen.findByRole("option", { name: "Иконки не должно быть" }));
+    await user.click(await screen.findByRole("option", { name: "Не должна быть" }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
     expect(name).toHaveValue("Мана");
     expect(minimum).toHaveValue(125);
@@ -396,7 +404,7 @@ describe("Icon conditions on TrackerPage", () => {
     fireEvent.error(thumbnail.querySelector("img") as HTMLImageElement);
     expect(screen.getByText("Снимок недоступен")).toBeInTheDocument();
     await user.click(iconCondition());
-    await user.click(await screen.findByRole("option", { name: "Иконки не должно быть" }));
+    await user.click(await screen.findByRole("option", { name: "Не должна быть" }));
     await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
   });
 
@@ -414,7 +422,7 @@ describe("Icon conditions on TrackerPage", () => {
       expect(screen.queryByRole("button", { name: "Открыть снимок иконки (40, 50)" })).not.toBeInTheDocument();
       expect(iconThreshold()).toHaveValue(90);
       await user.click(iconCondition());
-      await user.click(await screen.findByRole("option", { name: "Иконки не должно быть" }));
+      await user.click(await screen.findByRole("option", { name: "Не должна быть" }));
       await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
       expect(backend.state.profiles[0].trackers[0].icons[0].templateRect).toEqual(iconFixture().templateRect);
       expect(probe).toHaveBeenCalledTimes(1);
@@ -446,7 +454,7 @@ describe("Icon conditions on TrackerPage", () => {
     expect(screen.queryByRole("spinbutton", { name: "Сходство иконки (40, 50), %" })).not.toBeInTheDocument();
     expect(backend.state.profiles[0].trackers[0].icons).toEqual([iconFixture()]);
     await user.click(screen.getByRole("combobox", { name: "Условие" }));
-    await user.click(await screen.findByRole("option", { name: "Пиксели" }));
+    await user.click(await screen.findByRole("option", { name: "Визуальное" }));
     expect(await screen.findByRole("spinbutton", { name: "Сходство иконки (40, 50), %" })).toHaveValue(90);
     expect(toleranceInput()).toHaveValue(10);
   });
