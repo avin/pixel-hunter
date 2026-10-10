@@ -3,6 +3,7 @@ import { useKeyCapture } from "@/hooks/useKeyCapture";
 import { comboLabel } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/comboLabel";
 import { KeyRecorder } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/KeyRecorder/KeyRecorder";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import {
   Dialog,
   DialogContent,
@@ -87,7 +88,7 @@ export function PauseHotkeyDialog({ onClose }: Props) {
               {hotkey ? (
                 <>
                   Сейчас назначено{" "}
-                  <span className="font-mono text-foreground">{comboLabel(hotkey, labels)}</span>.
+                  <Kbd>{comboLabel(hotkey, labels)}</Kbd>.
                 </>
               ) : (
                 "Сочетание не назначено."

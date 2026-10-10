@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import type { CaptureStatus } from "@/store/types";
 
 interface Props {
@@ -56,6 +57,6 @@ function phaseMessage(status: CaptureStatus, processName: string) {
     case "countdown":
       return "Делаем снимок экрана...";
     default:
-      return "Выберите точку на снимке. Esc — отмена";
+      return <>Выберите точку на снимке. <Kbd>Esc</Kbd> — отмена</>;
   }
 }

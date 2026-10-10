@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import { comboLabel } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/comboLabel";
 import { KeyRecorder } from "@/components/pages/TrackerPage/ActionSection/KeySequenceEditor/KeyRecorder/KeyRecorder";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Label } from "@/components/ui/label";
 import {
@@ -107,7 +108,7 @@ export function HotkeySection({ profileId, tracker }: Props) {
           {tracker.hotkey ? (
             <>
               Сейчас назначено{" "}
-              <span className="font-mono">{comboLabel(tracker.hotkey, labels)}</span>.
+              <Kbd>{comboLabel(tracker.hotkey, labels)}</Kbd>.
             </>
           ) : (
             "Сочетание не назначено."

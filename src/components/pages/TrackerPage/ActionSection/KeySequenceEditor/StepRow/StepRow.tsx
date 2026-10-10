@@ -1,5 +1,6 @@
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import { useKeyCapture } from "@/hooks/useKeyCapture";
 import { TableCell, TableRow } from "@/components/ui/table";
 import type { KeyStep } from "@/store/types";
@@ -30,7 +31,7 @@ export function StepRow({
     <TableRow>
       <TableCell className="font-mono text-muted-foreground tabular-nums">{stepNumber}.</TableCell>
       <TableCell>
-        <kbd className="font-mono text-xs">{label}</kbd>
+        <Kbd>{label}</Kbd>
       </TableCell>
       <TableCell>
         {step.delayBeforeMs ? (
