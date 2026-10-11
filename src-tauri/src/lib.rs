@@ -118,9 +118,9 @@ pub fn run() {
             app.manage(gate);
             app.manage(pause);
             let handle = app.handle().clone();
-            loaded
-                .store
-                .subscribe(move |config| handle.state::<Engine>().config_changed(config));
+            loaded.store.subscribe(move |previous, config| {
+                handle.state::<Engine>().config_changed(previous, config)
+            });
             app.manage(loaded.store);
             app.manage(Screenshots::new(app_data_dir.join("screenshots")));
             app.manage(PixelCapture::default());

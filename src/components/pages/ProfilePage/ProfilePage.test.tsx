@@ -198,7 +198,7 @@ describe("ProfilePage", () => {
 
       expect(runToggle()).toBeDisabled();
       expect(runToggle()).toHaveAccessibleDescription(
-        "Добавьте пиксель или иконку, чтобы запустить",
+        "Еще не настроено",
       );
     });
 
@@ -231,7 +231,7 @@ describe("ProfilePage", () => {
       );
 
       expect(runToggle()).toBeDisabled();
-      expect(runToggle()).toHaveAccessibleDescription("Добавьте пиксель или иконку, чтобы запустить");
+      expect(runToggle()).toHaveAccessibleDescription("Еще не настроено");
     });
 
     it("asks to assign a combo when a hotkey tracker has none", async () => {

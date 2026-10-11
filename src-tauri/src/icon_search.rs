@@ -1,7 +1,7 @@
 //! Color template matching and decoded-template availability cache.
 use image::RgbImage;
 use opencv::{
-    core::{self, Mat},
+    core::{self, Mat, Scalar},
     imgproc,
     prelude::*,
 };
@@ -47,38 +47,100 @@ fn matrix(image: &RgbImage) -> Result<Mat, String> {
         .map_err(|e| e.to_string())
 }
 
-fn search(image: &RgbImage, template: &Mat) -> Result<f64, String> {
-    if image.width() < template.cols() as u32 || image.height() < template.rows() as u32 {
+struct Template {
+    matrix: Mat,
+    method: i32,
+    mean: Scalar,
+}
+
+impl Template {
+    fn new(image: &RgbImage) -> Result<Self, String> {
+        let matrix = matrix(image)?;
+        let mut mean = Scalar::default();
+        let mut deviation = Scalar::default();
+        core::mean_std_dev(&matrix, &mut mean, &mut deviation, &core::no_array())
+            .map_err(|e| e.to_string())?;
+        if mean[0] == 0.0 && mean[1] == 0.0 && mean[2] == 0.0 {
+            return Err("Полностью чёрный образец непригоден для поиска".into());
+        }
+        // Normalized correlation is undefined for a constant template; OpenCV
+        // returns 1 everywhere. Use its normalized RGB difference for that case.
+        let method = if deviation[0] == 0.0 && deviation[1] == 0.0 && deviation[2] == 0.0 {
+            imgproc::TM_SQDIFF_NORMED
+        } else {
+            imgproc::TM_CCOEFF_NORMED
+        };
+        let mut prepared = Mat::default();
+        // Center floating-point input with OpenCV to avoid cancellation when a
+        // bright template has very little contrast. Correlation is shift invariant.
+        let mean = if method == imgproc::TM_CCOEFF_NORMED {
+            mean
+        } else {
+            Scalar::all(0.0)
+        };
+        core::subtract(
+            &matrix,
+            &mean,
+            &mut prepared,
+            &core::no_array(),
+            core::CV_32F,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(Self {
+            matrix: prepared,
+            method,
+            mean,
+        })
+    }
+}
+
+fn search(image: &RgbImage, template: &Template) -> Result<f64, String> {
+    if image.width() < template.matrix.cols() as u32
+        || image.height() < template.matrix.rows() as u32
+    {
         return Err("Образец больше области поиска".into());
     }
     let bytes = Mat::from_slice(image.as_raw()).map_err(|e| e.to_string())?;
-    let image = bytes
+    let matrix = bytes
         .reshape(3, image.height() as i32)
         .map_err(|e| e.to_string())?;
     let mut result = Mat::default();
-    imgproc::match_template_def(&image, template, &mut result, imgproc::TM_SQDIFF_NORMED)
+    let mut prepared = Mat::default();
+    core::subtract(
+        &matrix,
+        &template.mean,
+        &mut prepared,
+        &core::no_array(),
+        core::CV_32F,
+    )
+    .map_err(|e| e.to_string())?;
+    imgproc::match_template_def(&prepared, &template.matrix, &mut result, template.method)
         .map_err(|e| e.to_string())?;
     // Validate all raw scores before reduction: minMaxLoc silently ignores NaN.
     if !core::check_range_def(&result).map_err(|e| e.to_string())? {
         return Err("Поиск вернул неконечную оценку сходства".into());
     }
-    let mut minimum = f64::NAN;
+    let (mut minimum, mut maximum) = (f64::NAN, f64::NAN);
     core::min_max_loc(
         &result,
         Some(&mut minimum),
-        None,
+        Some(&mut maximum),
         None,
         None,
         &core::no_array(),
     )
     .map_err(|e| e.to_string())?;
-    similarity(minimum)
+    if template.method == imgproc::TM_SQDIFF_NORMED {
+        similarity(minimum)
+    } else {
+        Ok(100.0 * maximum.clamp(0.0, 1.0))
+    }
 }
 
 struct Cached {
     length: u64,
     modified: SystemTime,
-    template: Result<Mat, String>,
+    template: Result<Template, String>,
 }
 #[derive(Default)]
 pub struct TemplateCache {
@@ -106,10 +168,7 @@ impl TemplateCache {
                     .map_err(|e| format!("Не удалось прочитать образец: {e}"))
                     .and_then(|image| {
                         let image = image.into_rgb8();
-                        if image.as_raw().iter().all(|v| *v == 0) {
-                            return Err("Полностью чёрный образец непригоден для поиска".into());
-                        }
-                        matrix(&image)
+                        Template::new(&image)
                     });
                 self.entries.insert(
                     id,
@@ -144,9 +203,46 @@ mod tests {
             for (x, y) in positions {
                 image::imageops::replace(&mut roi, &template, x, y);
             }
-            assert!(search(&roi, &matrix(&template).unwrap()).unwrap() > 99.99);
+            assert!(search(&roi, &Template::new(&template).unwrap()).unwrap() > 99.99);
         }
-        assert!(search(&image(6, 5, [30, 90, 220]), &matrix(&template).unwrap()).unwrap() < 90.0);
+        assert!(
+            search(
+                &image(6, 5, [30, 90, 220]),
+                &Template::new(&template).unwrap()
+            )
+            .unwrap()
+                < 90.0
+        );
+    }
+    #[test]
+    fn distinguishes_real_icon_from_other_list_and_empty_background() {
+        let fixtures = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../docs/verification/icon-recognition-2026-10-11");
+        let mut cache = TemplateCache::default();
+        let id = Uuid::new_v4();
+        for (name, expected) in [
+            ("present-live-region.png", true),
+            ("absent-live-region.png", false),
+            ("empty-live-patch.png", false),
+        ] {
+            let roi = image::open(fixtures.join(name)).unwrap().into_rgb8();
+            let result = cache.check(id, &fixtures.join("template.png"), &roi);
+            let IconResult::Similarity(score) = result else {
+                panic!("{name}: {result:?}");
+            };
+            assert_eq!(score >= 90.0, expected, "{name}: {score}%");
+        }
+    }
+    #[test]
+    fn bright_low_contrast_detail_is_not_lost_to_float_rounding() {
+        let mut reference = image(190, 76, [255, 255, 255]);
+        reference.put_pixel(50, 30, image::Rgb([254, 254, 254]));
+        let template = Template::new(&reference).unwrap();
+        assert_eq!(search(&reference, &template).unwrap(), 100.0);
+        assert_eq!(
+            search(&image(190, 76, [255, 255, 255]), &template).unwrap(),
+            0.0
+        );
     }
     #[test]
     fn inclusive_threshold_and_unavailable_never_pass_absence() {

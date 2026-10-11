@@ -115,10 +115,15 @@ impl TrackerHotkeyRegistry {
             .cloned()
             .collect();
         self.active.retain(still_wanted);
-        self.publish(events);
+        // Stop dispatching removed shortcuts before touching the OS registration.
+        // An unchanged poll does not need to rebuild or lock the event table.
+        if !removed.is_empty() {
+            self.publish(events);
+        }
         for item in &removed {
             let _ = self.host.unregister(&item.accelerator);
         }
+        let mut added = false;
         for item in desired {
             if self.holds(item.tracker_id) {
                 continue;
@@ -130,8 +135,11 @@ impl TrackerHotkeyRegistry {
                 tracker_id: item.tracker_id,
                 accelerator: item.accelerator.clone(),
             });
+            added = true;
         }
-        self.publish(events);
+        if added {
+            self.publish(events);
+        }
     }
 
     fn publish(&self, events: &Mutex<TrackerShortcutTable>) {
@@ -190,9 +198,10 @@ impl ShortcutGate {
     /// when the injection ends.
     pub fn sync(&self, desired: &[DesiredShortcut]) {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        state.desired = desired.to_vec();
-        let active = (state.injecting == 0).then(|| state.desired.clone());
-        let registered = active.as_deref().unwrap_or(&[]);
+        if state.desired != desired {
+            desired.clone_into(&mut state.desired);
+        }
+        let registered = if state.injecting == 0 { desired } else { &[] };
         state.registry.sync(registered, &self.events);
     }
 
@@ -206,8 +215,10 @@ impl ShortcutGate {
         let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         state.injecting = state.injecting.saturating_sub(1);
         if state.injecting == 0 {
-            let desired = state.desired.clone();
-            state.registry.sync(&desired, &self.events);
+            let GateState {
+                registry, desired, ..
+            } = &mut *state;
+            registry.sync(desired, &self.events);
         }
     }
 }
@@ -319,10 +330,12 @@ mod tests {
     struct FakeHost {
         fail: bool,
         registered: Vec<String>,
+        register_calls: usize,
     }
 
     impl ShortcutHost for FakeHost {
         fn register(&mut self, accelerator: &Accelerator) -> Result<(), ()> {
+            self.register_calls += 1;
             if self.fail {
                 self.fail = false;
                 return Err(());
@@ -534,5 +547,103 @@ mod tests {
 
         gate.resume();
         assert_eq!(host.lock().unwrap().registered, ["Tab"]);
+    }
+
+    #[test]
+    fn unchanged_polls_retry_refused_shortcuts_and_preserve_held_keys() {
+        let first = running_hotkey("F5");
+        let second = running_hotkey("F6");
+        let host = Arc::new(Mutex::new(FakeHost::default()));
+        let events = Arc::new(Mutex::new(TrackerShortcutTable::default()));
+        let gate = ShortcutGate::new(Box::new(SharedHost(Arc::clone(&host))), Arc::clone(&events));
+        let initial = desired_tracker_hotkeys(true, false, 0, true, &[first.clone()]);
+        let desired =
+            desired_tracker_hotkeys(true, false, 0, true, &[first.clone(), second.clone()]);
+        let shortcut = to_shortcut(&initial[0].accelerator).unwrap();
+
+        gate.sync(&initial);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .on_shortcut(&shortcut, ShortcutState::Pressed),
+            Some(first.id)
+        );
+        host.lock().unwrap().fail = true;
+        gate.sync(&desired);
+        assert_eq!(host.lock().unwrap().registered, ["F5"]);
+        gate.sync(&desired);
+        assert_eq!(host.lock().unwrap().registered, ["F5", "F6"]);
+        gate.sync(&desired);
+        assert_eq!(
+            host.lock().unwrap().register_calls,
+            3,
+            "active shortcuts are not registered again"
+        );
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .on_shortcut(&shortcut, ShortcutState::Pressed),
+            None
+        );
+
+        gate.sync(&initial);
+        assert_eq!(host.lock().unwrap().registered, ["F5"]);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .on_shortcut(&shortcut, ShortcutState::Pressed),
+            None
+        );
+        let mut table = events.lock().unwrap();
+        assert_eq!(table.on_shortcut(&shortcut, ShortcutState::Released), None);
+        assert_eq!(
+            table.on_shortcut(&shortcut, ShortcutState::Pressed),
+            Some(first.id)
+        );
+    }
+
+    #[test]
+    fn nested_injection_restores_the_latest_set_and_resets_removed_held_keys() {
+        let first = running_hotkey("F5");
+        let second = running_hotkey("F6");
+        let host = Arc::new(Mutex::new(FakeHost::default()));
+        let events = Arc::new(Mutex::new(TrackerShortcutTable::default()));
+        let gate = ShortcutGate::new(Box::new(SharedHost(Arc::clone(&host))), Arc::clone(&events));
+        let initial = desired_tracker_hotkeys(true, false, 0, true, &[first.clone()]);
+        let desired = desired_tracker_hotkeys(true, false, 0, true, &[first.clone(), second]);
+        let shortcut = to_shortcut(&initial[0].accelerator).unwrap();
+
+        gate.sync(&initial);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .on_shortcut(&shortcut, ShortcutState::Pressed),
+            Some(first.id)
+        );
+        gate.suspend();
+        gate.suspend();
+        gate.sync(&desired);
+        gate.resume();
+        assert!(host.lock().unwrap().registered.is_empty());
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .on_shortcut(&shortcut, ShortcutState::Pressed),
+            None
+        );
+        gate.resume();
+        assert_eq!(host.lock().unwrap().registered, ["F5", "F6"]);
+        assert_eq!(
+            events
+                .lock()
+                .unwrap()
+                .on_shortcut(&shortcut, ShortcutState::Pressed),
+            Some(first.id)
+        );
     }
 }

@@ -9,7 +9,7 @@ use crate::error::AppResult;
 
 const CONFIG_FILE: &str = "config.json";
 
-type Listener = Box<dyn Fn(&Config) + Send + Sync>;
+type Listener = Box<dyn Fn(&Config, &Config) + Send + Sync>;
 
 pub struct ConfigStore {
     path: PathBuf,
@@ -56,17 +56,20 @@ impl ConfigStore {
         let mut current = self.lock();
         let mut next = current.clone();
         let result = mutate(&mut next)?;
+        if next == *current {
+            return Ok(result);
+        }
         write_atomically(&self.path, &next)?;
-        *current = next;
+        let previous = std::mem::replace(&mut *current, next);
         if let Some(listener) = self.listener.get() {
-            listener(&current);
+            listener(&previous, &current);
         }
         Ok(result)
     }
 
-    /// `listener` gets every committed config, under the store lock and so in commit order;
+    /// `listener` gets the previous and committed config, under the store lock and in commit order;
     /// it must not call back into the store.
-    pub fn subscribe(&self, listener: impl Fn(&Config) + Send + Sync + 'static) {
+    pub fn subscribe(&self, listener: impl Fn(&Config, &Config) + Send + Sync + 'static) {
         if self.listener.set(Box::new(listener)).is_err() {
             panic!("ConfigStore supports a single listener");
         }
@@ -269,7 +272,7 @@ mod tests {
         let store = ConfigStore::load(dir).unwrap().store;
         let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
         let recorder = seen.clone();
-        store.subscribe(move |config| recorder.lock().unwrap().push(config.profiles.len()));
+        store.subscribe(move |_, config| recorder.lock().unwrap().push(config.profiles.len()));
         (store, seen)
     }
 
@@ -282,6 +285,40 @@ mod tests {
         add_profile(&store, "Path of Exile").unwrap();
 
         assert_eq!(*seen.lock().unwrap(), [1, 2]);
+    }
+
+    #[test]
+    fn unchanged_mutation_skips_disk_and_notification_but_returns_its_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let (store, seen) = subscribed_store(dir.path());
+        add_profile(&store, "Diablo").unwrap();
+        let saved = fs::read(dir.path().join(CONFIG_FILE)).unwrap();
+        // Any attempted write would fail, proving the unchanged mutation does no I/O.
+        fs::create_dir(dir.path().join("config.json.tmp")).unwrap();
+
+        assert_eq!(store.update(|_| Ok(42)).unwrap(), 42);
+        assert_eq!(fs::read(dir.path().join(CONFIG_FILE)).unwrap(), saved);
+        assert_eq!(*seen.lock().unwrap(), [1]);
+    }
+
+    #[test]
+    fn listener_sees_each_previous_and_committed_state_in_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ConfigStore::load(dir.path()).unwrap().store;
+        let seen = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let recorder = seen.clone();
+        store.subscribe(move |previous, current| {
+            recorder
+                .lock()
+                .unwrap()
+                .push((previous.profiles.len(), current.profiles.len()));
+        });
+
+        add_profile(&store, "Diablo").unwrap();
+        store.update(|_| Ok(())).unwrap();
+        add_profile(&store, "Path of Exile").unwrap();
+
+        assert_eq!(*seen.lock().unwrap(), [(0, 1), (1, 2)]);
     }
 
     #[test]

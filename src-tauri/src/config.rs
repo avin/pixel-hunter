@@ -467,6 +467,7 @@ mod tests {
                         "resumeDelayMs": 1000,
                         "pixels": [],
                         "icons": [],
+                        "visualOrder": [],
                         "trigger": "pixels",
                         "hotkey": null,
                         "action": { "type": "keySequence", "steps": [], "sound": { "id": null, "volumePercent": 50 } },

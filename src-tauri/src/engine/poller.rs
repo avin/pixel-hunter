@@ -250,6 +250,9 @@ impl Session {
             .flat_map(|t| t.icons.iter().map(|i| i.id))
             .collect();
         self.templates.retain(&icons);
+        if let Some(screen) = &mut self.screen {
+            screen.retain_icons(&icons);
+        }
         self.icon_errors.retain(|id, _| icons.contains(id));
         self.core.set_trackers(&self.trackers)
     }
@@ -288,7 +291,6 @@ impl Session {
             self.screen = None;
         }
 
-        let process_name = self.process_name.clone();
         let accepted = if game_active && !paused { presses } else { &[] };
         let Self {
             core,
@@ -299,12 +301,13 @@ impl Session {
             screenshots,
             icon_errors,
             profile_id,
+            process_name,
             ..
         } = self;
         core.tick_visual(
             now,
             paused,
-            &process_name,
+            process_name,
             accepted,
             |batch| {
                 if !game_active {
@@ -323,12 +326,10 @@ impl Session {
                         }
                     }
                 }
-                let rectangles: Vec<_> = batch
-                    .icons
-                    .iter()
-                    .map(|(_, icon)| (icon.id, icon.search_rect))
-                    .collect();
-                match screen.as_mut()?.read_visuals(&batch.points, &rectangles) {
+                match screen
+                    .as_mut()?
+                    .read_visuals_selected(&batch.points, |colors| batch.icon_rectangles(colors))
+                {
                     Ok((colors, images)) => {
                         *last_screen_error = None;
                         let icons = images

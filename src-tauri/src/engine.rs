@@ -6,7 +6,7 @@ mod machine;
 mod poller;
 
 #[cfg(test)]
-pub(crate) use machine::EngineCore;
+pub(crate) use machine::{EngineCore, VisualResults};
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
@@ -271,7 +271,7 @@ impl Engine {
     }
 
     /// Called by `ConfigStore` after each committed mutation.
-    pub fn config_changed(&self, config: &Config) {
+    pub fn config_changed(&self, previous: &Config, config: &Config) {
         let mut activation = self.activation();
         let Some(profile_id) = activation.profile_id else {
             return;
@@ -282,6 +282,14 @@ impl Engine {
             .find(|profile| profile.id == profile_id)
         {
             Some(profile) => {
+                if previous
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.id == profile_id)
+                    == Some(profile)
+                {
+                    return;
+                }
                 drop(activation);
                 self.send(Command::Update(profile.clone()));
             }
@@ -546,10 +554,30 @@ mod tests {
         engine.activate(&store, ids[0], 1).unwrap();
         sent(&receiver);
 
-        let config = store.read(Clone::clone);
-        engine.config_changed(&config);
+        let previous = store.read(Clone::clone);
+        let mut config = previous.clone();
+        config.profiles[0].name = "Updated".into();
+        engine.config_changed(&previous, &config);
 
         assert_eq!(sent(&receiver), [Sent::Update(ids[0])]);
+    }
+
+    #[test]
+    fn settings_and_other_profiles_do_not_rebuild_the_active_session() {
+        let (_dir, store, ids) = store_with(&["Diablo", "Path of Exile"]);
+        let (engine, receiver) = engine();
+        engine.activate(&store, ids[0], 1).unwrap();
+        sent(&receiver);
+        let previous = store.read(Clone::clone);
+        let mut settings_changed = previous.clone();
+        settings_changed.settings.last_screen =
+            crate::config::LastScreen::Profile { profile_id: ids[0] };
+        engine.config_changed(&previous, &settings_changed);
+        let mut other_profile_changed = settings_changed.clone();
+        other_profile_changed.profiles[1].name = "Updated".into();
+        engine.config_changed(&settings_changed, &other_profile_changed);
+
+        assert!(sent(&receiver).is_empty());
     }
 
     #[test]
@@ -557,7 +585,7 @@ mod tests {
         let (_dir, store, _) = store_with(&["Diablo"]);
         let (engine, receiver) = engine();
 
-        engine.config_changed(&store.read(Clone::clone));
+        engine.config_changed(&Config::default(), &store.read(Clone::clone));
 
         assert!(sent(&receiver).is_empty());
     }
@@ -569,9 +597,10 @@ mod tests {
         engine.activate(&store, ids[0], 1).unwrap();
         sent(&receiver);
 
-        let mut config = store.read(Clone::clone);
+        let previous = store.read(Clone::clone);
+        let mut config = previous.clone();
         config.profiles.retain(|profile| profile.id != ids[0]);
-        engine.config_changed(&config);
+        engine.config_changed(&previous, &config);
         engine.deactivate(1);
 
         assert_eq!(sent(&receiver), [Sent::Deactivate]);

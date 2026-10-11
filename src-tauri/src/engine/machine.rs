@@ -7,13 +7,39 @@ use uuid::Uuid;
 
 use super::color::pixel_passes;
 use crate::action::Action;
-use crate::config::{Icon, Rgb, Tracker, Trigger};
+use crate::config::{Icon, PhysicalRect, Rgb, Tracker, Trigger};
 use crate::icon_search::IconResult;
 
 #[derive(Default)]
-pub struct VisualBatch {
+pub struct VisualBatch<'a> {
     pub points: Vec<(u32, u32)>,
-    pub icons: Vec<(Uuid, Icon)>,
+    pub icons: Vec<(Uuid, &'a Icon)>,
+    trackers: Vec<&'a Tracker>,
+}
+
+impl VisualBatch<'_> {
+    /// Skip expensive icon readback and matching when the same frame's pixels already fail AND.
+    /// Icon-only trackers still search; no results from previous ticks are used.
+    pub fn icon_rectangles(&self, colors: &[Rgb]) -> Vec<(Uuid, PhysicalRect)> {
+        if colors.len() != self.points.len() {
+            return Vec::new();
+        }
+        let mut offset = 0;
+        let mut rectangles = Vec::with_capacity(self.icons.len());
+        for tracker in &self.trackers {
+            let end = offset + tracker.pixels.len();
+            if tracker
+                .pixels
+                .iter()
+                .zip(&colors[offset..end])
+                .all(|(pixel, color)| pixel_passes(*color, pixel))
+            {
+                rectangles.extend(tracker.icons.iter().map(|icon| (icon.id, icon.search_rect)));
+            }
+            offset = end;
+        }
+        rectangles
+    }
 }
 pub struct VisualResults {
     pub colors: Vec<Rgb>,
@@ -191,22 +217,17 @@ impl EngineCore {
         read: impl FnOnce(&VisualBatch) -> Option<VisualResults>,
         rng: &mut impl Rng,
     ) {
-        let polling: Vec<_> = self.polling_pixels().collect();
+        let polling: Vec<_> = self.polling_pixels().map(|run| &run.tracker).collect();
         let batch = VisualBatch {
             points: polling
                 .iter()
-                .flat_map(|run| run.tracker.pixels.iter().map(|p| (p.x, p.y)))
+                .flat_map(|tracker| tracker.pixels.iter().map(|p| (p.x, p.y)))
                 .collect(),
             icons: polling
                 .iter()
-                .flat_map(|run| {
-                    run.tracker
-                        .icons
-                        .iter()
-                        .cloned()
-                        .map(|icon| (run.tracker.id, icon))
-                })
+                .flat_map(|tracker| tracker.icons.iter().map(|icon| (tracker.id, icon)))
                 .collect(),
+            trackers: polling,
         };
         if batch.points.is_empty() && batch.icons.is_empty() {
             return;
@@ -214,22 +235,25 @@ impl EngineCore {
         let Some(results) = read(&batch).filter(|r| r.colors.len() == batch.points.len()) else {
             return;
         };
-        let mut colors = results.colors.into_iter();
+        let mut offset = 0;
         for run in self.runs.iter_mut().filter(|run| is_pixel_poll(run)) {
-            let samples: Vec<_> = colors.by_ref().take(run.tracker.pixels.len()).collect();
+            let end = offset + run.tracker.pixels.len();
+            let samples = &results.colors[offset..end];
+            offset = end;
             let pixels_pass = run
                 .tracker
                 .pixels
                 .iter()
                 .zip(samples)
-                .all(|(p, c)| pixel_passes(c, p));
-            let icons_pass = run.tracker.icons.iter().all(|icon| {
-                results
-                    .icons
-                    .iter()
-                    .find(|(id, _)| *id == icon.id)
-                    .is_some_and(|(_, result)| result.passes(icon))
-            });
+                .all(|(p, c)| pixel_passes(*c, p));
+            let icons_pass = pixels_pass
+                && run.tracker.icons.iter().all(|icon| {
+                    results
+                        .icons
+                        .iter()
+                        .find(|(id, _)| *id == icon.id)
+                        .is_some_and(|(_, result)| result.passes(icon))
+                });
             if pixels_pass && icons_pass {
                 enter_pre_delay(run, now, rng);
             }
@@ -449,6 +473,69 @@ mod tests {
             },
             &mut StdRng::seed_from_u64(1),
         )
+    }
+    #[test]
+    fn selects_icons_only_for_trackers_whose_current_pixels_pass() {
+        let mut mixed = tracker(&[(1, 1), (2, 2)], (0, 0), 0);
+        mixed.icons = vec![icon(crate::config::IconCondition::Absent)];
+        let mut second = tracker(&[(3, 3)], (0, 0), 0);
+        second.icons = vec![icon(crate::config::IconCondition::Present)];
+        let mut icons_only = tracker(&[], (0, 0), 0);
+        icons_only.icons = vec![icon(crate::config::IconCondition::Present)];
+        let mut core = EngineCore::default();
+        core.set_trackers(&[mixed.clone(), second.clone(), icons_only.clone()]);
+        let mut rng = StdRng::seed_from_u64(1);
+        let jobs = core.tick_visual(
+            ms(0),
+            false,
+            "game.exe",
+            &[],
+            |batch| {
+                // The first failed sample must not shift the samples belonging to another tracker.
+                let colors = vec![BLACK, RED, RED];
+                assert!(batch.icon_rectangles(&colors[..2]).is_empty());
+                let rectangles = batch.icon_rectangles(&colors);
+                assert_eq!(
+                    rectangles.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+                    [second.icons[0].id, icons_only.icons[0].id]
+                );
+                Some(VisualResults {
+                    colors,
+                    icons: rectangles
+                        .into_iter()
+                        .map(|(id, _)| (id, IconResult::Similarity(100.0)))
+                        .collect(),
+                })
+            },
+            &mut rng,
+        );
+        assert_eq!(
+            jobs.iter().map(|job| job.tracker_id).collect::<Vec<_>>(),
+            [second.id, icons_only.id]
+        );
+
+        // Failed pixels do not become an absent-icon match. The next tick searches afresh.
+        let jobs = core.tick_visual(
+            ms(50),
+            false,
+            "game.exe",
+            &[],
+            |batch| {
+                let colors = vec![RED, RED];
+                let rectangles = batch.icon_rectangles(&colors);
+                assert_eq!(
+                    rectangles,
+                    [(mixed.icons[0].id, mixed.icons[0].search_rect)]
+                );
+                Some(VisualResults {
+                    colors,
+                    icons: vec![(mixed.icons[0].id, IconResult::Similarity(0.0))],
+                })
+            },
+            &mut rng,
+        );
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].tracker_id, mixed.id);
     }
     #[test]
     fn visual_and_requires_current_pixels_and_every_icon() {

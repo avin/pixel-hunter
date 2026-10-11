@@ -154,6 +154,7 @@ impl PrimaryScreen {
         })
     }
 
+    #[cfg(test)]
     pub fn read_pixels(&mut self, points: &[(u32, u32)]) -> AppResult<Vec<Rgb>> {
         if points.is_empty() {
             return Ok(Vec::new());
@@ -202,6 +203,7 @@ impl PrimaryScreen {
     }
 
     /// All copies refer to the same acquired texture; no second capture between points and ROIs.
+    #[cfg(test)]
     pub fn read_visuals(
         &mut self,
         points: &[(u32, u32)],
@@ -210,13 +212,21 @@ impl PrimaryScreen {
         if rectangles.is_empty() {
             return self.read_pixels(points).map(|colors| (colors, vec![]));
         }
+        self.read_visuals_selected(points, |_| rectangles.to_vec())
+    }
+
+    /// Select ROIs after reading pixels, while keeping the very same acquired desktop texture.
+    pub fn read_visuals_selected(
+        &mut self,
+        points: &[(u32, u32)],
+        select: impl FnOnce(&[Rgb]) -> Vec<(Uuid, PhysicalRect)>,
+    ) -> AppResult<(Vec<Rgb>, Vec<(Uuid, Result<RgbImage, String>)>)> {
         let frame = self.current_frame()?;
         let desc = bgra_frame_desc(&frame)?;
         let colors = self.read_points_from(&frame, points)?;
-        self.roi_staging
-            .retain(|id, _| rectangles.iter().any(|(active, _)| active == id));
+        let rectangles = select(&colors);
         let mut images = Vec::with_capacity(rectangles.len());
-        for (id, rect) in rectangles {
+        for (id, rect) in &rectangles {
             let image = (|| -> AppResult<RgbImage> {
                 if !rect_fits(*rect, desc.Width, desc.Height) {
                     return Err(AppError::Capture(
@@ -257,18 +267,45 @@ impl PrimaryScreen {
                         Some(&source),
                     );
                 }
-                let bgra = self.read_staging(&staging, rect.width, rect.height)?;
-                let rgb = bgra
-                    .chunks_exact(4)
-                    .flat_map(|p| [p[2], p[1], p[0]])
-                    .collect();
-                RgbImage::from_raw(rect.width, rect.height, rgb)
-                    .ok_or_else(|| AppError::Capture("Некорректный размер области".into()))
+                self.read_staging_rgb(&staging, rect.width, rect.height)
             })()
             .map_err(|e| e.to_string());
             images.push((*id, image));
         }
         Ok((colors, images))
+    }
+
+    /// A cooldown or failed pixel check is temporary: retain textures until an icon is deleted.
+    pub fn retain_icons(&mut self, ids: &[Uuid]) {
+        self.roi_staging.retain(|id, _| ids.contains(id));
+    }
+
+    fn read_staging_rgb(
+        &self,
+        staging: &ID3D11Texture2D,
+        width: u32,
+        height: u32,
+    ) -> AppResult<RgbImage> {
+        let mut image = RgbImage::new(width, height);
+        unsafe {
+            let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
+            self.context
+                .Map(staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
+                .map_err(capture_error)?;
+            for (row, target) in image
+                .as_mut()
+                .chunks_exact_mut(width as usize * 3)
+                .enumerate()
+            {
+                let start = (mapped.pData as *const u8).add(row * mapped.RowPitch as usize);
+                let source = std::slice::from_raw_parts(start, width as usize * 4);
+                for (bgra, rgb) in source.chunks_exact(4).zip(target.chunks_exact_mut(3)) {
+                    rgb.copy_from_slice(&[bgra[2], bgra[1], bgra[0]]);
+                }
+            }
+            self.context.Unmap(staging, 0);
+        }
+        Ok(image)
     }
 
     fn current_frame(&mut self) -> AppResult<ID3D11Texture2D> {
@@ -588,6 +625,46 @@ mod tests {
     }
     #[test]
     #[ignore]
+    fn selected_rois_preserve_frame_colors_and_reuse_textures_between_polls() {
+        let mut screen = PrimaryScreen::new().unwrap();
+        let id = Uuid::new_v4();
+        let rect = PhysicalRect {
+            x: 10,
+            y: 10,
+            width: 42,
+            height: 19,
+        };
+        let points = [(10, 10), (51, 28)];
+        let (colors, images) = screen
+            .read_visuals_selected(&points, |colors| {
+                assert_eq!(colors.len(), points.len());
+                vec![(id, rect)]
+            })
+            .unwrap();
+        let image = images[0].1.as_ref().unwrap();
+        for (index, (x, y)) in [(0, 0), (41, 18)].into_iter().enumerate() {
+            let pixel = image.get_pixel(x, y).0;
+            assert_eq!(
+                colors[index],
+                Rgb {
+                    r: pixel[0],
+                    g: pixel[1],
+                    b: pixel[2]
+                }
+            );
+        }
+        let texture = screen.roi_staging[&id].2.clone();
+        let (_, skipped) = screen.read_visuals_selected(&points, |_| vec![]).unwrap();
+        assert!(skipped.is_empty());
+        screen
+            .read_visuals_selected(&points, |_| vec![(id, rect)])
+            .unwrap();
+        assert_eq!(texture.as_raw(), screen.roi_staging[&id].2.as_raw());
+        screen.retain_icons(&[]);
+        assert!(screen.roi_staging.is_empty());
+    }
+    #[test]
+    #[ignore]
     fn measures_visual_poll_on_windows() {
         use crate::icon_search::{IconResult, TemplateCache};
         use std::time::Instant;
@@ -674,6 +751,85 @@ mod tests {
         println!("Visual polling actual start-to-start p95 {:.2} ms (50ms schedule, no overlapping jobs)",periods[93]);
         let misses = elapsed.iter().filter(|ms| **ms > 50.0).count();
         println!("Windows actual DXGI {}x{}, 2 points + 3 ROIs {}x{}, templates24x24, n100: readback p95 {:.2} ms, matching p95 {:.2} ms, total p95 {:.2} ms, deadline misses {}/100",frame.width,frame.height,rect.width,rect.height,p95(&mut readback),p95(&mut matching),p95(&mut elapsed),misses);
+
+        // Real core + DXGI path with two mutually exclusive pixel conditions. No color can
+        // satisfy both, so every icon search is unnecessary regardless of desktop contents.
+        use crate::config::{Icon, IconCondition, Pixel, Tracker};
+        use crate::engine::EngineCore;
+        let mut tracker = Tracker::new("pixel gate benchmark".into());
+        tracker.is_running = true;
+        tracker.action.kind = crate::action::ActionKind::NetworkDisconnect;
+        tracker.pixels = [
+            Rgb { r: 0, g: 0, b: 0 },
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        ]
+        .into_iter()
+        .map(|color| {
+            let mut pixel = Pixel::new(Uuid::new_v4(), 0, 0, color);
+            pixel.tolerance_percent = 0;
+            pixel
+        })
+        .collect();
+        tracker.icons = ids
+            .iter()
+            .map(|id| Icon {
+                id: *id,
+                search_rect: rect,
+                template_rect: PhysicalRect {
+                    x: 0,
+                    y: 0,
+                    width: 24,
+                    height: 24,
+                },
+                condition: IconCondition::Present,
+                similarity_percent: 90,
+            })
+            .collect();
+        let mut core = EngineCore::default();
+        core.set_trackers(&[tracker]);
+        let mut rng = rand::rng();
+        let mut gated_times = Vec::new();
+        let mut gated_periods = Vec::new();
+        let mut previous = None;
+        let gated_started = Instant::now();
+        for _ in 0..100 {
+            let start = Instant::now();
+            if let Some(last) = previous.replace(start) {
+                gated_periods.push(start.duration_since(last).as_secs_f64() * 1000.0);
+            }
+            let jobs = core.tick_visual(
+                gated_started.elapsed(),
+                false,
+                "game.exe",
+                &[],
+                |batch| {
+                    let (colors, images) = screen
+                        .read_visuals_selected(&batch.points, |colors| {
+                            batch.icon_rectangles(colors)
+                        })
+                        .unwrap();
+                    assert!(
+                        images.is_empty(),
+                        "failed pixels must skip all three ROI readbacks and searches"
+                    );
+                    Some(crate::engine::VisualResults {
+                        colors,
+                        icons: vec![],
+                    })
+                },
+                &mut rng,
+            );
+            assert!(jobs.is_empty());
+            let elapsed = start.elapsed();
+            gated_times.push(elapsed.as_secs_f64() * 1000.0);
+            std::thread::sleep(std::time::Duration::from_millis(50).saturating_sub(elapsed));
+        }
+        gated_periods.sort_by(f64::total_cmp);
+        println!("Failed pixel AND gate: same 3 configured ROIs, 2 points, n100: total p95 {:.3} ms, start-to-start p95 {:.3} ms, ROI readbacks/searches 0", p95(&mut gated_times), gated_periods[93]);
     }
 
     /// Saves the primary monitor to a PNG in the temp directory:
