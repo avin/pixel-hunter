@@ -1,0 +1,9 @@
+present-live-region.png SQDIFF_NORMED: 99.99998929489848%
+present-live-region.png CCORR_NORMED: 99.99999403953552%
+present-live-region.png CCOEFF_NORMED: 99.99992251396179%
+absent-live-region.png SQDIFF_NORMED: 92.76080429553986%
+absent-live-region.png CCORR_NORMED: 96.43097519874573%
+absent-live-region.png CCOEFF_NORMED: 38.35382163524628%
+empty-live-patch.png SQDIFF_NORMED: 92.42414236068726%
+empty-live-patch.png CCORR_NORMED: 96.40882611274719%
+empty-live-patch.png CCOEFF_NORMED: 0%

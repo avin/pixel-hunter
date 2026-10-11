@@ -1,0 +1,3 @@
+present-live-region.png: Similarity(99.99999403953552); present=true, absent=false (threshold 90%)
+absent-live-region.png: Similarity(38.35366368293762); present=false, absent=true (threshold 90%)
+empty-live-patch.png: Similarity(0.0); present=false, absent=true (threshold 90%)

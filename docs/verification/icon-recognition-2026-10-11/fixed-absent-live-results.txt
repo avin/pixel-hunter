@@ -1,0 +1,12 @@
+LIVE configured ROI PhysicalRect { x: 1602, y: 477, width: 547, height: 598 }; result Similarity(36.66262328624725); passes false
+LIVE configured ROI threshold 90: present false, absent true
+LIVE configured ROI threshold 95: present false, absent true
+LIVE configured ROI threshold 99: present false, absent true
+LIVE pixel 1955,489: Some(Rgb { r: 153, g: 180, b: 209 }); reference {"b":209,"g":180,"r":153}
+CONTROL template itself Similarity(99.99999403953552)
+Template mostly-white pixels: 78.92%
+SYNTHETIC black negative control Similarity(0.0)
+LIVE patch 0 at ROI offset 0,0: Similarity(9.070391207933426); present passes false; absent passes true
+LIVE patch 1 at ROI offset 0,200: Similarity(17.946934700012207); present passes false; absent passes true
+LIVE patch 2 at ROI offset 200,400: Similarity(0.0); present passes false; absent passes true
+Evidence directory C:\Users\avin\AppData\Local\Temp\pixel-hunter-icon-check-20261011

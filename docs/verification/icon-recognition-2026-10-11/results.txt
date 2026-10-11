@@ -1,0 +1,16 @@
+LIVE configured ROI PhysicalRect { x: 1602, y: 477, width: 547, height: 598 }; result Similarity(92.76080429553986); passes true
+LIVE configured ROI threshold 90: present true, absent false
+LIVE configured ROI threshold 95: present false, absent true
+LIVE configured ROI threshold 99: present false, absent true
+LIVE pixel 1955,489: Some(Rgb { r: 153, g: 180, b: 209 }); reference {"b":209,"g":180,"r":153}
+CONTROL template itself Similarity(99.99998929489848)
+Template mostly-white pixels: 78.92%
+SYNTHETIC black negative control Similarity(0.0)
+LIVE patch 0 at ROI offset 0,0: Similarity(87.02457398176193); present passes false; absent passes true
+LIVE patch 1 at ROI offset 0,200: Similarity(87.6741960644722); present passes false; absent passes true
+LIVE patch 2 at ROI offset 200,400: Similarity(92.42414236068726); present passes true; absent passes false
+Evidence directory C:\Users\avin\AppData\Local\Temp\pixel-hunter-icon-check-20261011
+
+thread 'main' (24396) panicked at main.rs:72:9:
+Confirmed false-positive: real empty panel patch accepted as present at 90%: Similarity(92.42414236068726)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
