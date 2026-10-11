@@ -111,6 +111,9 @@ pub struct Tracker {
     pub pixels: Vec<Pixel>,
     #[serde(default)]
     pub icons: Vec<Icon>,
+    /// Shared addition order of pixels and icons; older configs have no history.
+    #[serde(default)]
+    pub visual_order: Vec<Uuid>,
     #[serde(default)]
     pub trigger: Trigger,
     #[serde(default)]
@@ -149,10 +152,28 @@ impl Tracker {
             resume_delay_ms: DEFAULT_RESUME_DELAY_MS,
             pixels: Vec::new(),
             icons: Vec::new(),
+            visual_order: Vec::new(),
             trigger: Trigger::Pixels,
             hotkey: None,
             action: Action::default(),
             is_running: false,
+        }
+    }
+
+    pub fn normalize_visual_order(&mut self) {
+        let ids: Vec<_> = self
+            .pixels
+            .iter()
+            .map(|pixel| pixel.id)
+            .chain(self.icons.iter().map(|icon| icon.id))
+            .collect();
+        let mut seen = std::collections::HashSet::new();
+        self.visual_order
+            .retain(|id| ids.contains(id) && seen.insert(*id));
+        for id in ids {
+            if seen.insert(id) {
+                self.visual_order.push(id);
+            }
         }
     }
 

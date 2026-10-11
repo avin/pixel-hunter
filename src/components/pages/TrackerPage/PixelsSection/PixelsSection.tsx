@@ -51,6 +51,15 @@ export function PixelsSection({ profileId, tracker }: Props) {
 
   const isPixelActive = isCapturing && status?.mode === "pixel";
   const isIconActive = isCapturing && status?.mode === "icon";
+  const visualRows = new Map([
+    ...tracker.pixels.map((pixel) => [pixel.id, (
+      <PixelRow key={pixel.id} profileId={profileId} trackerId={tracker.id} pixel={pixel} screenshotsDir={screenshotsDir} />
+    )] as const),
+    ...tracker.icons.map((icon) => [icon.id, (
+      <IconRow key={icon.id} profileId={profileId} trackerId={tracker.id} icon={icon} screenshotsDir={screenshotsDir} />
+    )] as const),
+  ]);
+  const visualOrder = [...new Set([...(tracker.visualOrder ?? []), ...visualRows.keys()])];
   function cancelWaiting() {
     if (status && captureIsWaiting(status)) void cancelCapture({ sessionId: status.sessionId });
   }
@@ -101,24 +110,7 @@ export function PixelsSection({ profileId, tracker }: Props) {
         <div className="min-h-0 flex-1 overflow-auto">
           <Table aria-label="Визуальные условия" className="min-w-[640px] text-xs [&_td]:py-2">
             <TableBody>
-              {tracker.pixels.map((pixel) => (
-                <PixelRow
-                  key={pixel.id}
-                  profileId={profileId}
-                  trackerId={tracker.id}
-                  pixel={pixel}
-                  screenshotsDir={screenshotsDir}
-                />
-              ))}
-              {tracker.icons.map((icon) => (
-                <IconRow
-                  key={icon.id}
-                  profileId={profileId}
-                  trackerId={tracker.id}
-                  icon={icon}
-                  screenshotsDir={screenshotsDir}
-                />
-              ))}
+              {visualOrder.map((id) => visualRows.get(id))}
             </TableBody>
           </Table>
         </div>

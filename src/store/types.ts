@@ -130,6 +130,8 @@ export interface Tracker {
   resumeDelayMs: number;
   pixels: Pixel[];
   icons: Icon[];
+  /** Shared addition order. Older configs use pixels followed by icons. */
+  visualOrder?: string[];
   /** Missing data from an older config means pixels. */
   trigger: Trigger;
   hotkey: KeyCombo | null;

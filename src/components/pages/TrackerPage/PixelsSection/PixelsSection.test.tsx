@@ -16,10 +16,10 @@ import { renderApp } from "@/test/renderApp";
 
 let activeBackend: FakeBackend;
 
-async function openTracker(pixels: Pixel[] = [], icons: Icon[] = []) {
+async function openTracker(pixels: Pixel[] = [], icons: Icon[] = [], visualOrder?: string[]) {
   const rendered = renderApp(
     createFakeBackend({
-      profiles: [profileFixture({ trackers: [trackerFixture({ pixels, icons })] })],
+      profiles: [profileFixture({ trackers: [trackerFixture({ pixels, icons, visualOrder })] })],
     }),
   );
   activeBackend = rendered.backend;
@@ -47,6 +47,23 @@ const toleranceInput = (point = "(812, 1040)") =>
   screen.getByRole("spinbutton", { name: `Допуск пикселя ${point}, %` });
 
 describe("Pixel capture on TrackerPage", () => {
+  it.each([
+    { order: ["pixel-1", "icon-1", "pixel-2"], labels: ["Условие пикселя (812, 1040)", "Условие иконки (40, 50)", "Условие пикселя (100, 200)"] },
+    { order: ["icon-1", "pixel-1", "pixel-2"], labels: ["Условие иконки (40, 50)", "Условие пикселя (812, 1040)", "Условие пикселя (100, 200)"] },
+    { order: undefined, labels: ["Условие пикселя (812, 1040)", "Условие пикселя (100, 200)", "Условие иконки (40, 50)"] },
+  ])("displays the saved addition order or the legacy order: $order", async ({ order, labels }) => {
+    await openTracker(
+      [pixelFixture(), pixelFixture({ id: "pixel-2", x: 100, y: 200 })],
+      [iconFixture()],
+      order,
+    );
+    const rows = within(screen.getByRole("table", { name: "Визуальные условия" })).getAllByRole("row");
+    expect(rows).toHaveLength(labels.length);
+    labels.forEach((name, index) => {
+      expect(within(rows[index]).getByRole("combobox", { name })).toBeInTheDocument();
+    });
+  });
+
   it("waits for PrintScreen until the active button cancels it", async () => {
     const { user, backend } = await openTracker();
     await user.click(addButton());

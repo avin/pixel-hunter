@@ -268,9 +268,10 @@ pub fn add_pixel(
 ) -> AppResult<Pixel> {
     pixel.validate()?;
     store.update(|config| {
-        find_tracker(config, profile_id, tracker_id)?
-            .pixels
-            .push(pixel.clone());
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        tracker.normalize_visual_order();
+        tracker.visual_order.push(pixel.id);
+        tracker.pixels.push(pixel.clone());
         Ok(pixel)
     })
 }
@@ -312,6 +313,7 @@ pub fn delete_pixel(
             .position(|pixel| pixel.id == pixel_id)
             .ok_or(PIXEL_NOT_FOUND)?;
         tracker.pixels.remove(index);
+        tracker.visual_order.retain(|id| *id != pixel_id);
         tracker.stop_if_incomplete();
         Ok(())
     })?;
@@ -378,9 +380,10 @@ pub fn add_icon(
 ) -> AppResult<Icon> {
     icon.validate()?;
     store.update(|config| {
-        find_tracker(config, profile_id, tracker_id)?
-            .icons
-            .push(icon.clone());
+        let tracker = find_tracker(config, profile_id, tracker_id)?;
+        tracker.normalize_visual_order();
+        tracker.visual_order.push(icon.id);
+        tracker.icons.push(icon.clone());
         Ok(icon)
     })
 }
@@ -444,6 +447,7 @@ pub fn delete_icon(
             .position(|i| i.id == icon_id)
             .ok_or(AppError::NotFound("Иконка не найдена"))?;
         tracker.icons.remove(index);
+        tracker.visual_order.retain(|id| *id != icon_id);
         tracker.stop_if_incomplete();
         Ok(())
     })?;
@@ -496,6 +500,90 @@ mod tests {
             fs::write(path, b"png").unwrap();
         }
         add_icon(&fixture.store, profile_id, tracker_id, icon).unwrap()
+    }
+
+    #[test]
+    fn visual_addition_order_survives_edits_deletion_and_reload() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Game");
+        let tracker = create_tracker(&fixture.store, profile.id, "Mixed".into()).unwrap();
+        let icon = fixture_icon(&fixture, profile.id, tracker.id);
+        let pixel = fixture.pixel(profile.id, tracker.id);
+        let second_icon = fixture_icon(&fixture, profile.id, tracker.id);
+        assert_eq!(
+            fixture.reloaded()[0].trackers[0].visual_order,
+            [icon.id, pixel.id, second_icon.id]
+        );
+
+        update_pixel(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            pixel.id,
+            pixel_input(PixelCondition::NotEquals, 20),
+        )
+        .unwrap();
+        update_icon(
+            &fixture.store,
+            profile.id,
+            tracker.id,
+            icon.id,
+            IconInput {
+                condition: IconCondition::Absent,
+                similarity_percent: 75,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            fixture.reloaded()[0].trackers[0].visual_order,
+            [icon.id, pixel.id, second_icon.id]
+        );
+
+        delete_pixel(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            pixel.id,
+        )
+        .unwrap();
+        delete_icon(
+            &fixture.store,
+            &fixture.screenshots,
+            profile.id,
+            tracker.id,
+            icon.id,
+        )
+        .unwrap();
+        let next_pixel = fixture.pixel(profile.id, tracker.id);
+        assert_eq!(
+            fixture.reloaded()[0].trackers[0].visual_order,
+            [second_icon.id, next_pixel.id]
+        );
+    }
+
+    #[test]
+    fn additions_to_legacy_config_keep_existing_visuals_first() {
+        let fixture = Fixture::new();
+        let profile = fixture.profile("Game");
+        let tracker = create_tracker(&fixture.store, profile.id, "Legacy".into()).unwrap();
+        let pixel = fixture.pixel(profile.id, tracker.id);
+        let icon = fixture_icon(&fixture, profile.id, tracker.id);
+        let path = fixture.dir.path().join("config.json");
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["profiles"][0]["trackers"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("visualOrder");
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        let store = ConfigStore::load(fixture.dir.path()).unwrap().store;
+        let next_pixel = Pixel::new(Uuid::new_v4(), 10, 20, Rgb { r: 0, g: 0, b: 0 });
+        add_pixel(&store, profile.id, tracker.id, next_pixel.clone()).unwrap();
+        assert_eq!(
+            fixture.reloaded()[0].trackers[0].visual_order,
+            [pixel.id, icon.id, next_pixel.id]
+        );
     }
 
     #[test]
