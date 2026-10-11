@@ -302,7 +302,7 @@ describe("Pixel table on TrackerPage", () => {
     expect(within(table).getAllByRole("cell", { name: "Пиксель" })).toHaveLength(2);
     expect(within(table).getByRole("cell", { name: "Иконка" })).toBeInTheDocument();
     expect(iconCondition()).toHaveTextContent("Должна присутствовать");
-    expect(iconThreshold()).toHaveValue(90);
+    expect(iconThreshold()).toHaveValue(95);
 
     const first = row("812, 1040");
     const thumbnail = within(first).getByRole("button", {
@@ -480,7 +480,7 @@ describe("Icon conditions on TrackerPage", () => {
   it("shows an icon without pixels and opens its own screenshot", async () => {
     const { user, backend } = await openTracker([], [iconFixture()]);
     expect(screen.queryByText("Пикселей и иконок пока нет")).not.toBeInTheDocument();
-    expect(iconThreshold()).toHaveValue(90);
+    expect(iconThreshold()).toHaveValue(95);
     expect(iconCondition()).toHaveTextContent("Должна присутствовать");
     await user.pointer({ keys: "[MouseLeft]", target: screen.getByRole("button", { name: "Открыть снимок иконки (40, 50)" }), coords: { clientX: 120, clientY: 240 } });
     expect(backend.callsOf("icon_view_open")).toEqual([{ profileId: "profile-1", trackerId: "tracker-1", iconId: "icon-1", origin: { x: 120, y: 240 } }]);
@@ -557,7 +557,7 @@ describe("Icon conditions on TrackerPage", () => {
       fireEvent.error(fullScreenshot);
       expect(await screen.findByText("Снимок недоступен")).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: "Открыть снимок иконки (40, 50)" })).not.toBeInTheDocument();
-      expect(iconThreshold()).toHaveValue(90);
+      expect(iconThreshold()).toHaveValue(95);
       await user.click(iconCondition());
       await user.click(await screen.findByRole("option", { name: "Не должна присутствовать" }));
       await waitFor(() => expect(backend.state.profiles[0].trackers[0].icons[0].condition).toBe("absent"));
@@ -592,7 +592,7 @@ describe("Icon conditions on TrackerPage", () => {
     expect(backend.state.profiles[0].trackers[0].icons).toEqual([iconFixture()]);
     await user.click(screen.getByRole("combobox", { name: "Условие" }));
     await user.click(await screen.findByRole("option", { name: "Визуальное" }));
-    expect(await screen.findByRole("spinbutton", { name: "Сходство иконки (40, 50), %" })).toHaveValue(90);
+    expect(await screen.findByRole("spinbutton", { name: "Сходство иконки (40, 50), %" })).toHaveValue(95);
     expect(toleranceInput()).toHaveValue(10);
   });
 

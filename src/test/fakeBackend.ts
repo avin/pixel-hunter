@@ -520,7 +520,7 @@ export function iconFixture(overrides: Partial<Icon> = {}): Icon {
     searchRect: { x: 20, y: 30, width: 300, height: 80 },
     templateRect: { x: 40, y: 50, width: 24, height: 24 },
     condition: "present",
-    similarityPercent: 90,
+    similarityPercent: 95,
     ...overrides,
   };
 }

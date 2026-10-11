@@ -290,7 +290,7 @@ pub enum IconCondition {
 }
 
 fn default_similarity_percent() -> u8 {
-    90
+    95
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -312,7 +312,7 @@ impl Icon {
             search_rect,
             template_rect,
             condition: IconCondition::Present,
-            similarity_percent: 90,
+            similarity_percent: default_similarity_percent(),
         }
     }
 
@@ -387,7 +387,7 @@ mod tests {
             height: 5,
         };
         let mut icon = Icon::new(Uuid::new_v4(), area, area);
-        assert_eq!(icon.similarity_percent, 90);
+        assert_eq!(icon.similarity_percent, 95);
         for threshold in [1, 90, 100] {
             icon.similarity_percent = threshold;
             assert!(icon.validate().is_ok());
