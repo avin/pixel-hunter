@@ -35,7 +35,7 @@ if (!(Test-Path $archive)) {
 if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne $sha256) { throw 'OpenCV source SHA256 does not match the pinned release.' }
 if (!(Test-Path $source)) { Expand-Archive -LiteralPath $archive -DestinationPath $native }
 & cmake -S $source -B $build -G Ninja "-DCMAKE_INSTALL_PREFIX=$install" -DCMAKE_BUILD_TYPE=Release `
-    -DCMAKE_INSTALL_LIBDIR=lib -DCMAKE_INSTALL_BINDIR=bin '-DBUILD_LIST=core,imgproc' -DBUILD_SHARED_LIBS=ON `
+    -DOPENCV_LIB_INSTALL_PATH=lib -DOPENCV_BIN_INSTALL_PATH=bin '-DBUILD_LIST=core,imgproc' -DBUILD_SHARED_LIBS=ON `
     -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF `
     -DBUILD_JAVA=OFF -DBUILD_opencv_python2=OFF -DBUILD_opencv_python3=OFF `
     -DWITH_IPP=OFF -DWITH_OPENCL=OFF -DWITH_ITT=OFF -DWITH_FFMPEG=OFF -DWITH_MSMF=OFF -DWITH_TBB=OFF
